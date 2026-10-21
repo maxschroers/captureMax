@@ -31,7 +31,7 @@ TR = {
         "exposure": "Belichtung: 1/{} s  (kürzer = dunkler, mehr FPS)",
         "exp_na": "Belichtung wird auf diesem System nicht unterstützt",
         "start": "Start", "stop": "Stop", "ready": "bereit", "starting": "starte...",
-        "running": "läuft · {} · {:.0f} fps", "muted": "stumm",
+        "running": "läuft · {} · {:.0f} fps",
         "no_device": "Fehler: kein Videogerät gefunden", "no_frames": "Fehler: kein Bild vom Gerät (belegt?)",
         "error": "Fehler: {}",
     },
@@ -43,7 +43,7 @@ TR = {
         "exposure": "Exposure: 1/{} s  (shorter = darker, more FPS)",
         "exp_na": "Exposure control is not supported on this system",
         "start": "Start", "stop": "Stop", "ready": "ready", "starting": "starting...",
-        "running": "running · {} · {:.0f} fps", "muted": "muted",
+        "running": "running · {} · {:.0f} fps",
         "no_device": "Error: no video device found", "no_frames": "Error: no picture from device (in use?)",
         "error": "Error: {}",
     },
@@ -51,7 +51,8 @@ TR = {
 
 ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
     "volume": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',
-    "muted": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/>',
+    "muted": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
+             '<path d="M19 5a10 10 0 0 1 0 14"/><path d="M3 3l18 18"/>',  # struck-through speaker
     "settings": '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/>'
                 '<circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/>',
 }
@@ -518,7 +519,7 @@ class Main(QWidget):
         vol, on = self.vol.value(), self.listen.isChecked()
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
-        self.live.pct.setText(f"{vol} %" if on else self.t("muted"))
+        self.live.pct.setText(f"{vol} %")
         self.live.mute.setIcon(icon("volume" if on else "muted"))
         out = self.session.audioOutput() if self.session else None
         if out:
