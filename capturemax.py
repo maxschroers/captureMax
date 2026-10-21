@@ -33,7 +33,7 @@ TR = {
         "start": "Start", "stop": "Stop", "ready": "bereit", "starting": "starte...",
         "running": "läuft · {} · {:.0f} fps",
         "no_device": "Fehler: kein Videogerät gefunden", "no_frames": "Fehler: kein Bild vom Gerät (belegt?)",
-        "error": "Fehler: {}",
+        "error": "Fehler: {}", "tip_mute": "Stumm (auch im Stream)", "tip_listen": "Nur für mich stumm",
     },
     "en": {
         "subtitle": "capture card & webcam viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ADVANCED",
@@ -45,7 +45,7 @@ TR = {
         "start": "Start", "stop": "Stop", "ready": "ready", "starting": "starting...",
         "running": "running · {} · {:.0f} fps",
         "no_device": "Error: no video device found", "no_frames": "Error: no picture from device (in use?)",
-        "error": "Error: {}",
+        "error": "Error: {}", "tip_mute": "Mute (stream too)", "tip_listen": "Mute for me only",
     },
 }
 
@@ -53,6 +53,10 @@ ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
     "volume": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',
     "muted": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
              '<path d="M19 5a10 10 0 0 1 0 14"/><path d="M3 3l18 18"/>',  # struck-through speaker
+    "listen": '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1'
+              'a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
+    "deaf": '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1'
+            'a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/><path d="M3 3l18 18"/>',  # struck-through headphones
     "settings": '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/>'
                 '<circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/>',
 }
@@ -118,6 +122,46 @@ def windows_exposure(name, manual, value):
         cap.release()
 
 
+def windows_mixer_mute(muted):
+    """Mute this process in the Windows volume mixer on every output. The app itself keeps playing, so window
+    capture (Discord, OBS) still gets the audio while the user hears nothing."""
+    from ctypes import POINTER, c_float, c_int, c_uint, c_void_p
+    from ctypes.wintypes import BOOL, DWORD
+    from comtypes import CLSCTX_ALL, COMMETHOD, GUID, HRESULT, STDMETHOD, CoCreateInstance, IUnknown
+
+    class ISimpleAudioVolume(IUnknown):
+        _iid_ = GUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
+        _methods_ = [STDMETHOD(HRESULT, "SetMasterVolume", []), STDMETHOD(HRESULT, "GetMasterVolume", []),
+                     COMMETHOD([], HRESULT, "SetMute", (["in"], BOOL), (["in"], POINTER(GUID)))]
+
+    class IAudioSessionManager(IUnknown):
+        _iid_ = GUID("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")  # IAudioSessionManager2 (starts with v1's methods)
+        _methods_ = [STDMETHOD(HRESULT, "GetAudioSessionControl", []),
+                     COMMETHOD([], HRESULT, "GetSimpleAudioVolume", (["in"], POINTER(GUID)), (["in"], DWORD),
+                               (["out"], POINTER(POINTER(ISimpleAudioVolume))))]
+
+    class IMMDevice(IUnknown):
+        _iid_ = GUID("{D666063F-1587-4E43-81F1-B948E807363F}")
+        _methods_ = [COMMETHOD([], HRESULT, "Activate", (["in"], POINTER(GUID)), (["in"], DWORD), (["in"], c_void_p),
+                               (["out"], POINTER(POINTER(IAudioSessionManager))))]
+
+    class IMMDeviceCollection(IUnknown):
+        _iid_ = GUID("{0BD7A1BE-7A1A-44DB-8397-CC5392387B5E}")
+        _methods_ = [COMMETHOD([], HRESULT, "GetCount", (["out"], POINTER(c_uint))),
+                     COMMETHOD([], HRESULT, "Item", (["in"], c_uint), (["out"], POINTER(POINTER(IMMDevice))))]
+
+    class IMMDeviceEnumerator(IUnknown):
+        _iid_ = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
+        _methods_ = [COMMETHOD([], HRESULT, "EnumAudioEndpoints", (["in"], c_int), (["in"], DWORD),
+                               (["out"], POINTER(POINTER(IMMDeviceCollection))))]
+
+    devices = CoCreateInstance(GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}"), IMMDeviceEnumerator,
+                               CLSCTX_ALL).EnumAudioEndpoints(0, 1)  # render endpoints, active
+    for i in range(devices.GetCount()):
+        manager = devices.Item(i).Activate(IAudioSessionManager._iid_, CLSCTX_ALL, None)
+        manager.GetSimpleAudioVolume(None, 0).SetMute(muted, None)  # None = the process's default session
+
+
 class Toggle(QAbstractButton):
     """Pill switch with text (a stylesheet can't give QCheckBox a sliding knob)."""
 
@@ -173,11 +217,11 @@ class Combo(QComboBox):
 
 
 class Live(QWidget):
-    """Video window: paints frames aspect-fit, hover bar with mute / volume / settings at the bottom."""
+    """Video window: paints frames aspect-fit, hover bar with mute / listen / volume / settings at the bottom."""
 
     def __init__(self, main):
         super().__init__()
-        self.main, self.image = main, QImage()
+        self.main, self.frame, self.image = main, None, QImage()
         self.setWindowTitle(f"{APP} - Live")
         self.resize(1280, 720)
         self.setMouseTracking(True)
@@ -187,7 +231,9 @@ class Live(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
         self.mute = QToolButton(iconSize=QSize(20, 20))
-        self.mute.clicked.connect(main.listen.toggle)
+        self.mute.clicked.connect(main.toggle_mute)
+        self.listen = QToolButton(iconSize=QSize(20, 20))
+        self.listen.clicked.connect(main.listen.toggle)
         self.vol = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=100)
         self.vol.setFixedWidth(200)
         self.vol.valueChanged.connect(main.vol.setValue)
@@ -195,18 +241,21 @@ class Live(QWidget):
         self.pct.setFixedWidth(52)
         gear = QToolButton(icon=icon("settings"), iconSize=QSize(20, 20))
         gear.clicked.connect(main.show_settings)
-        for w in (self.mute, self.vol, self.pct, gear):
+        for w in (self.mute, self.listen, self.vol, self.pct, gear):
             lay.addWidget(w)
         self.bar.hide()
         self.bar.installEventFilter(self)
         self.hider = QTimer(self, singleShot=True, interval=1500)
         self.hider.timeout.connect(self.bar.hide)
 
-    def show_frame(self, image):
-        self.image = image
+    def show_frame(self, frame):
+        self.frame = frame
         self.update()
 
     def paintEvent(self, _):
+        if self.frame is not None:  # convert only frames that actually get painted; update() coalesces the rest
+            self.image, self.frame = self.frame.toImage(), None
+            self.main.shown += 1
         p = QPainter(self)
         p.fillRect(self.rect(), Qt.GlobalColor.black)
         if not self.image.isNull():
@@ -255,6 +304,7 @@ class Main(QWidget):
         self.lang = self.st.value("lang", default_lang)
         self.texts = []  # (widget, key) pairs re-labelled on language switch
         self.session = self.camera = None
+        self.muted = False  # full mute incl. stream; per session on purpose, a silent stream after restart confuses
         self.frames, self.shown, self.last_frame, self.t0 = deque(), 0, 0.0, 0.0
         self.status_key, self.status_args, self.status_kind = "ready", (), "idle"
         self.sink = QVideoSink(self)
@@ -380,6 +430,8 @@ class Main(QWidget):
             widget.setText(self.t(key))
             widget.updateGeometry()
         self.btn.setText(self.t("stop" if self.camera else "start"))
+        self.live.mute.setToolTip(self.t("tip_mute"))
+        self.live.listen.setToolTip(self.t("tip_listen"))
         self.refresh()  # the "Off" audio entry is translated too
         self.update_labels()
         self.apply_audio()
@@ -461,7 +513,7 @@ class Main(QWidget):
         self.last_frame = self.t0
         self.set_status("starting")
         self.camera.start()
-        self.live.image = QImage()
+        self.live.frame, self.live.image = None, QImage()
         self.live.show()
         self.live.raise_()
         self.set_running(True)
@@ -477,6 +529,8 @@ class Main(QWidget):
         if not self.camera:
             return
         self.camera.stop()
+        if sys.platform == "win32" and self.session.audioOutput():  # mixer mute outlives us, leave it clean
+            windows_mixer_mute(False)
         self.session.deleteLater()
         self.camera.deleteLater()
         self.session = self.camera = None
@@ -493,15 +547,15 @@ class Main(QWidget):
         self.btn.style().polish(self.btn)
 
     def on_frame(self, frame):
-        """Delay buffer: show the oldest frame that is at least `delay` old, drop older ones (no backlog)."""
+        """Delay buffer: show the oldest frame that is at least `delay` old, drop older ones (no backlog).
+        Kept cheap on purpose: frames arrive as queued signals, a slow slot here makes them pile up = lag."""
         now = time.monotonic()
         self.last_frame, delay = now, self.buf.value() / 1000
         self.frames.append((now, frame))
         while len(self.frames) > 1 and now - self.frames[1][0] >= delay:
             self.frames.popleft()
         if now - self.frames[0][0] >= delay:
-            self.live.show_frame(self.frames.popleft()[1].toImage())
-            self.shown += 1
+            self.live.show_frame(self.frames.popleft()[1])
 
     def tick(self):
         if not self.camera:
@@ -515,16 +569,27 @@ class Main(QWidget):
         self.shown, self.t0 = 0, now
 
     def apply_audio(self):
-        """Settings card and hover bar share volume/listen; the capture session's output follows both."""
+        """Settings card and hover bar share volume/listen; the capture session's output follows both.
+        Mute silences the app itself (stream too). Listen off on Windows only mutes it in the volume mixer,
+        so window capture (Discord) keeps the audio."""
         vol, on = self.vol.value(), self.listen.isChecked()
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
         self.live.pct.setText(f"{vol} %")
-        self.live.mute.setIcon(icon("volume" if on else "muted"))
+        self.live.mute.setIcon(icon("muted" if self.muted else "volume"))
+        self.live.listen.setIcon(icon("listen" if on else "deaf"))
         out = self.session.audioOutput() if self.session else None
         if out:
             out.setVolume(vol / 100)
-            out.setMuted(not on)
+            if sys.platform == "win32":
+                out.setMuted(self.muted)
+                windows_mixer_mute(not on)
+            else:
+                out.setMuted(self.muted or not on)
+
+    def toggle_mute(self):
+        self.muted = not self.muted
+        self.apply_audio()
 
     def show_settings(self):
         self.showNormal()
