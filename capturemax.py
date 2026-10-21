@@ -6,11 +6,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, QLocale, QPoint, QRect, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap
-from PySide6.QtMultimedia import (QAudioInput, QAudioOutput, QCamera, QMediaCaptureSession, QMediaDevices,
-                                  QVideoFrameFormat, QVideoSink)
+from PySide6.QtMultimedia import (QAudioFormat, QAudioSink, QAudioSource, QCamera, QMediaCaptureSession,
+                                  QMediaDevices, QVideoFrameFormat, QVideoSink)
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout,
-                               QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStylePainter,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QProxyStyle, QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox,
+                               QStylePainter, QToolButton, QVBoxLayout, QWidget)
 
 APP = "captureMax"
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
@@ -21,31 +21,40 @@ DANGER, DANGER_HOVER = "#e5484d", "#c43c40"
 STATUS_COLORS = {"idle": MUTED, "ok": "#34d399", "err": "#f87171"}
 JPEG = QVideoFrameFormat.PixelFormat.Format_Jpeg
 LANGS = {"de": "Deutsch", "en": "English"}
+FLAGS = {  # 3:2 artwork, drawn as svg (Windows has no flag emoji)
+    "de": '<rect width="60" height="40" fill="#ffce00"/><rect width="60" height="26.7" fill="#dd0000"/>'
+          '<rect width="60" height="13.3" fill="#000"/>',
+    "en": '<rect width="60" height="40" fill="#012169"/>'
+          '<path d="M0 0L60 40M60 0L0 40" stroke="#fff" stroke-width="8"/>'
+          '<path d="M0 0L60 40M60 0L0 40" stroke="#c8102e" stroke-width="3"/>'
+          '<path d="M30 0v40M0 20h60" stroke="#fff" stroke-width="12"/>'
+          '<path d="M30 0v40M0 20h60" stroke="#c8102e" stroke-width="7"/>',
+}
 
 TR = {
     "de": {
         "subtitle": "Capture-Card- & Webcam-Viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ERWEITERT",
         "device": "Gerät", "res": "Auflösung", "fps": "FPS", "input": "Eingang", "output": "Ausgabe (Monitor)",
-        "off": "Aus", "volume": "Lautstärke: {} %", "listen": "Für mich hören (aus = stumm)",
+        "off": "Aus", "volume": "Lautstärke: {} %", "listen": "Ausgabe aktivieren",
         "delay": "Verzögerung: {} ms", "low_latency": "  (Low-Latency)", "auto_exp": "Auto-Belichtung (Webcam)",
         "exposure": "Belichtung: 1/{} s  (kürzer = dunkler, mehr FPS)",
         "exp_na": "Belichtung wird auf diesem System nicht unterstützt",
-        "start": "Start", "stop": "Stop", "ready": "bereit", "starting": "starte...",
+        "start": "Start", "save": "Speichern", "ready": "bereit", "starting": "starte...",
         "running": "läuft · {} · {:.0f} fps",
         "no_device": "Fehler: kein Videogerät gefunden", "no_frames": "Fehler: kein Bild vom Gerät (belegt?)",
-        "error": "Fehler: {}", "tip_mute": "Stumm (auch im Stream)", "tip_listen": "Nur für mich stumm",
+        "error": "Fehler: {}",
     },
     "en": {
         "subtitle": "capture card & webcam viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ADVANCED",
         "device": "Device", "res": "Resolution", "fps": "FPS", "input": "Input", "output": "Output (monitor)",
-        "off": "Off", "volume": "Volume: {} %", "listen": "Listen myself (off = muted)",
+        "off": "Off", "volume": "Volume: {} %", "listen": "Enable output",
         "delay": "Delay: {} ms", "low_latency": "  (low latency)", "auto_exp": "Auto exposure (webcam)",
         "exposure": "Exposure: 1/{} s  (shorter = darker, more FPS)",
         "exp_na": "Exposure control is not supported on this system",
-        "start": "Start", "stop": "Stop", "ready": "ready", "starting": "starting...",
+        "start": "Start", "save": "Save", "ready": "ready", "starting": "starting...",
         "running": "running · {} · {:.0f} fps",
         "no_device": "Error: no video device found", "no_frames": "Error: no picture from device (in use?)",
-        "error": "Error: {}", "tip_mute": "Mute (stream too)", "tip_listen": "Mute for me only",
+        "error": "Error: {}",
     },
 }
 
@@ -53,10 +62,8 @@ ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
     "volume": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',
     "muted": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
              '<path d="M19 5a10 10 0 0 1 0 14"/><path d="M3 3l18 18"/>',  # struck-through speaker
-    "listen": '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1'
-              'a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
-    "deaf": '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1'
-            'a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/><path d="M3 3l18 18"/>',  # struck-through headphones
+    "stop": '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
     "settings": '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/>'
                 '<circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/>',
 }
@@ -74,6 +81,7 @@ QLabel[role="hint"]:disabled {{ color: {BORDER}; }}
 QComboBox {{ background: {FIELD}; border: none; border-radius: 8px; padding: 0 12px; min-height: 34px;
              combobox-popup: 0; }}
 QComboBox:hover {{ background: {BORDER}; }}
+QComboBox:disabled {{ color: {BORDER}; background: {FIELD}; }}
 QComboBox::drop-down {{ border: none; width: 28px; }}
 QComboBox::down-arrow {{ image: url("{(ASSETS / "chevron.svg").as_posix()}"); width: 12px; height: 12px; }}
 QComboBox QAbstractItemView {{ background: {FIELD}; border: 1px solid {BORDER}; padding: 4px; outline: none; }}
@@ -88,19 +96,30 @@ QSlider::sub-page:horizontal:disabled, QSlider::handle:horizontal:disabled {{ ba
 QPushButton#start {{ background: {ACCENT}; border: none; border-radius: 12px; min-height: 48px;
                      font-size: 16px; font-weight: bold; }}
 QPushButton#start:hover {{ background: {ACCENT_HOVER}; }}
-QPushButton#start[running="true"] {{ background: {DANGER}; }}
-QPushButton#start[running="true"]:hover {{ background: {DANGER_HOVER}; }}
 QLabel#status {{ background: {SURFACE}; border-radius: 16px; min-height: 32px; padding: 0 16px; font-size: 12px; }}
 QFrame#bar {{ background: rgba(21, 37, 74, 235); border: 1px solid {BORDER}; border-radius: 14px; }}
 QToolButton {{ background: {FIELD}; border: none; border-radius: 10px; min-width: 40px; min-height: 36px; }}
 QToolButton:hover {{ background: {BORDER}; }}
+QToolButton#stop {{ background: {DANGER}; }}
+QToolButton#stop:hover {{ background: {DANGER_HOVER}; }}
+QToolButton:checked {{ background: {ACCENT}; }}
+QLabel#info {{ background: rgba(21, 37, 74, 235); border: 1px solid {BORDER}; border-radius: 10px;
+               padding: 6px 12px; font-size: 12px; }}
 """
 
 
-def icon(name):
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
-           f'stroke="{TEXT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+def svg_icon(svg):
     return QIcon(QPixmap.fromImage(QImage.fromData(QByteArray(svg.encode()), "SVG")))
+
+
+def icon(name):
+    return svg_icon(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
+                    f'stroke="{TEXT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+
+
+def flag(lang):
+    return svg_icon(f'<svg xmlns="http://www.w3.org/2000/svg" width="60" height="40" viewBox="0 0 60 40">'
+                    f'{FLAGS[lang]}</svg>')
 
 
 def label(text="", role="hint"):
@@ -122,44 +141,13 @@ def windows_exposure(name, manual, value):
         cap.release()
 
 
-def windows_mixer_mute(muted):
-    """Mute this process in the Windows volume mixer on every output. The app itself keeps playing, so window
-    capture (Discord, OBS) still gets the audio while the user hears nothing."""
-    from ctypes import POINTER, c_float, c_int, c_uint, c_void_p
-    from ctypes.wintypes import BOOL, DWORD
-    from comtypes import CLSCTX_ALL, COMMETHOD, GUID, HRESULT, STDMETHOD, CoCreateInstance, IUnknown
+class JumpStyle(QProxyStyle):
+    """Fusion, but a click on a slider jumps there instead of paging toward it."""
 
-    class ISimpleAudioVolume(IUnknown):
-        _iid_ = GUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
-        _methods_ = [STDMETHOD(HRESULT, "SetMasterVolume", []), STDMETHOD(HRESULT, "GetMasterVolume", []),
-                     COMMETHOD([], HRESULT, "SetMute", (["in"], BOOL), (["in"], POINTER(GUID)))]
-
-    class IAudioSessionManager(IUnknown):
-        _iid_ = GUID("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")  # IAudioSessionManager2 (starts with v1's methods)
-        _methods_ = [STDMETHOD(HRESULT, "GetAudioSessionControl", []),
-                     COMMETHOD([], HRESULT, "GetSimpleAudioVolume", (["in"], POINTER(GUID)), (["in"], DWORD),
-                               (["out"], POINTER(POINTER(ISimpleAudioVolume))))]
-
-    class IMMDevice(IUnknown):
-        _iid_ = GUID("{D666063F-1587-4E43-81F1-B948E807363F}")
-        _methods_ = [COMMETHOD([], HRESULT, "Activate", (["in"], POINTER(GUID)), (["in"], DWORD), (["in"], c_void_p),
-                               (["out"], POINTER(POINTER(IAudioSessionManager))))]
-
-    class IMMDeviceCollection(IUnknown):
-        _iid_ = GUID("{0BD7A1BE-7A1A-44DB-8397-CC5392387B5E}")
-        _methods_ = [COMMETHOD([], HRESULT, "GetCount", (["out"], POINTER(c_uint))),
-                     COMMETHOD([], HRESULT, "Item", (["in"], c_uint), (["out"], POINTER(POINTER(IMMDevice))))]
-
-    class IMMDeviceEnumerator(IUnknown):
-        _iid_ = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
-        _methods_ = [COMMETHOD([], HRESULT, "EnumAudioEndpoints", (["in"], c_int), (["in"], DWORD),
-                               (["out"], POINTER(POINTER(IMMDeviceCollection))))]
-
-    devices = CoCreateInstance(GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}"), IMMDeviceEnumerator,
-                               CLSCTX_ALL).EnumAudioEndpoints(0, 1)  # render endpoints, active
-    for i in range(devices.GetCount()):
-        manager = devices.Item(i).Activate(IAudioSessionManager._iid_, CLSCTX_ALL, None)
-        manager.GetSimpleAudioVolume(None, 0).SetMute(muted, None)  # None = the process's default session
+    def styleHint(self, hint, opt=None, widget=None, ret=None):
+        if hint == QStyle.StyleHint.SH_Slider_AbsoluteSetButtons:
+            return Qt.MouseButton.LeftButton.value
+        return super().styleHint(hint, opt, widget, ret)
 
 
 class Toggle(QAbstractButton):
@@ -217,7 +205,7 @@ class Combo(QComboBox):
 
 
 class Live(QWidget):
-    """Video window: paints frames aspect-fit, hover bar with mute / listen / volume / settings at the bottom."""
+    """Video window: paints frames aspect-fit, hover bar with settings / mute / volume / info / stop at the bottom."""
 
     def __init__(self, main):
         super().__init__()
@@ -231,9 +219,7 @@ class Live(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(8)
         self.mute = QToolButton(iconSize=QSize(20, 20))
-        self.mute.clicked.connect(main.toggle_mute)
-        self.listen = QToolButton(iconSize=QSize(20, 20))
-        self.listen.clicked.connect(main.listen.toggle)
+        self.mute.clicked.connect(main.listen.toggle)
         self.vol = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=100)
         self.vol.setFixedWidth(200)
         self.vol.valueChanged.connect(main.vol.setValue)
@@ -241,7 +227,15 @@ class Live(QWidget):
         self.pct.setFixedWidth(52)
         gear = QToolButton(icon=icon("settings"), iconSize=QSize(20, 20))
         gear.clicked.connect(main.show_settings)
-        for w in (self.mute, self.listen, self.vol, self.pct, gear):
+        stop = QToolButton(icon=icon("stop"), iconSize=QSize(20, 20), objectName="stop")
+        stop.clicked.connect(main.stop)
+        self.info = QLabel(self, objectName="info")
+        info = QToolButton(icon=icon("info"), iconSize=QSize(20, 20), checkable=True)
+        info.toggled.connect(self.info.setVisible)
+        info.toggled.connect(lambda on: main.st.setValue("info", on))
+        info.setChecked(main.st.value("info", False, type=bool))
+        self.info.setVisible(info.isChecked())
+        for w in (gear, self.mute, self.vol, self.pct, info, stop):
             lay.addWidget(w)
         self.bar.hide()
         self.bar.installEventFilter(self)
@@ -276,7 +270,14 @@ class Live(QWidget):
     def enterEvent(self, _):
         self.reveal()
 
+    def set_info(self, text):
+        """Resolution / fps overlay, top right."""
+        self.info.setText(text)
+        self.info.adjustSize()
+        self.info.move(self.width() - self.info.width() - 16, 16)
+
     def resizeEvent(self, _):
+        self.set_info(self.info.text())
         if self.bar.isVisible():
             self.reveal()
 
@@ -303,8 +304,7 @@ class Main(QWidget):
         default_lang = "de" if QLocale.system().language() == QLocale.Language.German else "en"
         self.lang = self.st.value("lang", default_lang)
         self.texts = []  # (widget, key) pairs re-labelled on language switch
-        self.session = self.camera = None
-        self.muted = False  # full mute incl. stream; per session on purpose, a silent stream after restart confuses
+        self.session = self.camera = self.mic = self.speaker = None
         self.frames, self.shown, self.last_frame, self.t0 = deque(), 0, 0.0, 0.0
         self.status_key, self.status_args, self.status_kind = "ready", (), "idle"
         self.sink = QVideoSink(self)
@@ -326,7 +326,9 @@ class Main(QWidget):
         h.addWidget(self.tr_(label(), "subtitle"))
         self.lang_box = Combo()
         self.lang_box.setObjectName("lang")
-        self.lang_box.addItems(LANGS.values())
+        self.lang_box.setIconSize(QSize(24, 16))
+        for code, name in LANGS.items():
+            self.lang_box.addItem(flag(code), name)
         self.lang_box.setCurrentIndex(list(LANGS).index(self.lang))
         self.lang_box.currentIndexChanged.connect(lambda i: self.set_lang(list(LANGS)[i]))
         h.addSpacing(12)
@@ -346,10 +348,11 @@ class Main(QWidget):
 
         card = self.card(cols, "audio")
         self.ain = self.field(card, "input")
-        self.aout = self.field(card, "output")
-        self.vol_lbl, self.vol = self.slider(card, 0, 100, int(self.st.value("volume", 100)))
         self.listen = self.tr_(Toggle(self.st.value("listen", True, type=bool)), "listen")
         card.addWidget(self.listen)
+        card.addSpacing(6)
+        self.aout = self.field(card, "output")
+        self.vol_lbl, self.vol = self.slider(card, 0, 100, int(self.st.value("volume", 100)))
         card.addStretch()
 
         card = self.card(cols, "advanced")
@@ -362,7 +365,7 @@ class Main(QWidget):
             self.auto_exp.setEnabled(False)
 
         self.btn = self.tr_(QPushButton(objectName="start", cursor=Qt.CursorShape.PointingHandCursor), "start")
-        self.btn.clicked.connect(self.toggle)
+        self.btn.clicked.connect(self.start)
         root.addWidget(self.btn)
         self.status = QLabel(objectName="status")
         root.addWidget(self.status)
@@ -432,9 +435,7 @@ class Main(QWidget):
         for widget, key in self.texts:
             widget.setText(self.t(key))
             widget.updateGeometry()
-        self.btn.setText(self.t("stop" if self.camera else "start"))
-        self.live.mute.setToolTip(self.t("tip_mute"))
-        self.live.listen.setToolTip(self.t("tip_listen"))
+        self.btn.setText(self.t("save" if self.camera else "start"))
         self.refresh()  # the "Off" audio entry is translated too
         self.update_labels()
         self.apply_audio()
@@ -449,6 +450,8 @@ class Main(QWidget):
         self.exp_lbl.setText(self.t("exposure", 2 ** -self.exp.value()) if manual_ok else self.t("exp_na"))
 
     def set_status(self, key, *args, kind="idle"):
+        if kind == "err" and key != self.status_key:  # settings are hidden while live, the status line is there
+            self.show_settings()
         self.status_key, self.status_args, self.status_kind = key, args, kind
         self.status.setText(f"●  {self.t(key, *args)}")
         self.status.setStyleSheet(f"color: {STATUS_COLORS[kind]};")
@@ -495,12 +498,11 @@ class Main(QWidget):
         return min(cands, key=lambda f: (abs(f.maxFrameRate() - fps), f.pixelFormat() != JPEG))
 
     # ---- capture
-    def toggle(self):
-        self.stop() if self.camera else self.start()
-
     def start(self):
+        """Start, or while running ("Save" from the hover bar's settings) restart with the new settings."""
         if not self.cams or not self.res.currentText():
             return self.set_status("no_device", kind="err")
+        self.stop()
         self.save()
         dev, manual = self.cams[self.video.currentIndex()], self.auto_exp.isEnabled() and not self.auto_exp.isChecked()
         if sys.platform == "win32" and (manual or self.st.value("exp_was_manual", False, type=bool)):
@@ -515,8 +517,7 @@ class Main(QWidget):
         self.session.setCamera(self.camera)
         self.session.setVideoSink(self.sink)
         if self.ain.currentIndex() > 0 and self.aouts:
-            self.session.setAudioInput(QAudioInput(self.ains[self.ain.currentIndex() - 1], self.session))
-            self.session.setAudioOutput(QAudioOutput(self.aouts[self.aout.currentIndex()], self.session))
+            self.start_audio(self.ains[self.ain.currentIndex() - 1], self.aouts[self.aout.currentIndex()])
         self.apply_audio()
         self.frames.clear()
         self.shown, self.t0 = 0, time.monotonic()
@@ -524,9 +525,29 @@ class Main(QWidget):
         self.set_status("starting")
         self.camera.start()
         self.live.frame, self.live.image = None, QImage()
+        self.live.set_info("…")
         self.live.show()
         self.live.raise_()
-        self.set_running(True)
+        self.hide()
+        self.btn.setText(self.t("save"))
+
+    def start_audio(self, dev_in, dev_out):
+        """Own source -> sink pump instead of the capture session's audio path, which crackles. 48 kHz stereo when
+        the device can; when the sink is full the excess is dropped, so audio latency can't creep up."""
+        fmt = QAudioFormat()
+        fmt.setSampleRate(48000)
+        fmt.setChannelCount(2)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        if not dev_in.isFormatSupported(fmt):
+            fmt = dev_in.preferredFormat()
+        self.mic, self.speaker = QAudioSource(dev_in, fmt, self), QAudioSink(dev_out, fmt, self)
+        self.speaker.setBufferSize(fmt.bytesForDuration(100_000))  # 100 ms: no dropouts, little latency
+        out, inp = self.speaker.start(), self.mic.start()
+
+        def pump():
+            data, free = bytes(inp.readAll()), self.speaker.bytesFree()
+            out.write(data[:free - free % fmt.bytesPerFrame()])
+        inp.readyRead.connect(pump)
 
     def qt_exposure(self):
         if self.camera.isExposureModeSupported(QCamera.ExposureMode.ExposureManual):
@@ -539,22 +560,21 @@ class Main(QWidget):
         if not self.camera:
             return
         self.camera.stop()
-        if sys.platform == "win32" and self.session.audioOutput():  # mixer mute outlives us, leave it clean
-            windows_mixer_mute(False)
+        if self.speaker:
+            self.mic.stop()
+            self.speaker.stop()
+            self.mic.deleteLater()
+            self.speaker.deleteLater()
+            self.mic = self.speaker = None
+        self.session.setCamera(None)
         self.session.deleteLater()
-        self.camera.deleteLater()
-        self.session = self.camera = None
+        self.session = self.camera = None  # unparented: freed right here, so a restart can reopen the device
         self.frames.clear()
         self.live.hide()
-        self.set_running(False)
+        self.btn.setText(self.t("start"))
         if self.status_kind != "err":
             self.set_status("ready")
-
-    def set_running(self, on):
-        self.btn.setText(self.t("stop" if on else "start"))
-        self.btn.setProperty("running", on)
-        self.btn.style().unpolish(self.btn)
-        self.btn.style().polish(self.btn)
+        self.show_settings()
 
     def on_frame(self, frame):
         """Delay buffer: show the oldest frame that is at least `delay` old, drop older ones (no backlog).
@@ -574,32 +594,21 @@ class Main(QWidget):
         if now - self.last_frame > 3:
             self.set_status("no_frames", kind="err")
         elif self.shown:
-            size = self.live.image.size()
-            self.set_status("running", f"{size.width()}x{size.height()}", self.shown / (now - self.t0), kind="ok")
+            size, fps = self.live.image.size(), self.shown / (now - self.t0)
+            self.set_status("running", f"{size.width()}x{size.height()}", fps, kind="ok")
+            self.live.set_info(f"{size.width()}x{size.height()}  ·  {fps:.0f} fps")
         self.shown, self.t0 = 0, now
 
     def apply_audio(self):
-        """Settings card and hover bar share volume/listen; the capture session's output follows both.
-        Mute silences the app itself (stream too). Listen off on Windows only mutes it in the volume mixer,
-        so window capture (Discord) keeps the audio."""
+        """Settings card and hover bar share volume/listen; the audio sink follows both."""
         vol, on = self.vol.value(), self.listen.isChecked()
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
         self.live.pct.setText(f"{vol} %")
-        self.live.mute.setIcon(icon("muted" if self.muted else "volume"))
-        self.live.listen.setIcon(icon("listen" if on else "deaf"))
-        out = self.session.audioOutput() if self.session else None
-        if out:
-            out.setVolume(vol / 100)
-            if sys.platform == "win32":
-                out.setMuted(self.muted)
-                windows_mixer_mute(not on)
-            else:
-                out.setMuted(self.muted or not on)
-
-    def toggle_mute(self):
-        self.muted = not self.muted
-        self.apply_audio()
+        self.live.mute.setIcon(icon("volume" if on else "muted"))
+        self.aout.setEnabled(on)
+        if self.speaker:
+            self.speaker.setVolume(vol / 100 if on else 0)
 
     def show_settings(self):
         self.showNormal()
@@ -626,7 +635,7 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP)
     app = QApplication(sys.argv)
     app.setApplicationName(APP)
-    app.setStyle("Fusion")
+    app.setStyle(JumpStyle("Fusion"))
     pal = QPalette()
     for role, color in ((QPalette.ColorRole.Window, BG), (QPalette.ColorRole.Base, FIELD),
                         (QPalette.ColorRole.Text, TEXT), (QPalette.ColorRole.WindowText, TEXT),

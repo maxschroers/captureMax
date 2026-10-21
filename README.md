@@ -10,10 +10,10 @@
 
 - **Live video** from any capture card or webcam the OS knows. Resolution and FPS lists come from the device's
   real formats, and compressed formats (MJPG) are preferred automatically so USB devices reach full frame rate.
-- **Audio monitoring**: plays the capture card's audio on any output. Volume and mute work live. Two kinds of mute:
-  the speaker silences captureMax entirely; the headphones ("listen myself" off) only silence it for you. On Windows
-  that mutes captureMax in the volume mixer, so Discord or OBS capturing the window still hear the audio.
-- **Hover controls**: move the mouse over the live window to show mute, mute-for-me, volume and a settings button.
+- **Audio monitoring**: plays the capture card's audio (48 kHz stereo) on any output. Volume and mute work live.
+  The audio input follows the video device automatically.
+- **Hover controls**: move the mouse over the live window to show stop, mute, volume, info (resolution and live fps, top right) and a settings button. The
+  settings window hides while live; open it from the hover bar and press *Save* to restart with the new settings.
 - **Low latency** by default, with an optional video delay (0–2000 ms) to line up picture and sound.
 - **Webcam tuning**: manual exposure for higher frame rates in low light (Windows and Linux).
 - **German and English UI**: follows the system language, switchable in the header.

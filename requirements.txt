@@ -2,5 +2,3 @@ PySide6==6.12.0
 # Windows only: Qt can't set webcam exposure there, DirectShow can
 opencv-python-headless==5.0.0.93; sys_platform == "win32"
 pygrabber==0.2; sys_platform == "win32"
-# Windows only: "listen off" mutes the app in the volume mixer, so Discord window capture still gets the audio
-comtypes==1.4.17; sys_platform == "win32"
