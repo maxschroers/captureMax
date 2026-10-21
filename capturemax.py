@@ -369,6 +369,7 @@ class Main(QWidget):
 
         self.live = Live(self)
         self.video.currentIndexChanged.connect(self.fill_res)
+        self.video.currentIndexChanged.connect(self.match_audio)
         self.res.currentIndexChanged.connect(self.fill_fps)
         self.vol.valueChanged.connect(self.apply_audio)
         self.listen.toggled.connect(self.apply_audio)
@@ -380,6 +381,8 @@ class Main(QWidget):
                     self.devices.audioOutputsChanged):
             sig.connect(self.refresh)
         self.refresh()
+        if not self.st.contains("audio_in"):  # first run: pair audio with the video device
+            self.match_audio()
         self.set_lang(self.lang)
         self.ticker = QTimer(self, interval=1000)
         self.ticker.timeout.connect(self.tick)
@@ -462,6 +465,13 @@ class Main(QWidget):
         self.aout.fill([d.description() for d in self.aouts], self.aout.currentText() or self.st.value(
             "audio_out", QMediaDevices.defaultAudioOutput().description()))
         self.fill_res()
+
+    def match_audio(self):
+        """Capture cards / webcams show up as an audio input named after the camera ("Mikrofon (2- USB Capture)")."""
+        name = self.video.currentText()
+        i = next((i for i, d in enumerate(self.ains) if name and name in d.description()), None)
+        if i is not None:
+            self.ain.setCurrentIndex(i + 1)  # +1: "Off" comes first
 
     def formats(self):
         return self.cams[self.video.currentIndex()].videoFormats() if self.cams else []
