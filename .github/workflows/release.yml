@@ -1,15 +1,36 @@
-name: Release
+name: Build & release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+  pull_request:
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            bin: dist/captureMax.exe
+            package: cp dist/captureMax.exe captureMax-windows.exe
+            asset: captureMax-windows.exe
+          - os: macos-latest
+            bin: dist/captureMax.app/Contents/MacOS/captureMax
+            package: ditto -c -k --keepParent dist/captureMax.app captureMax-macos.zip
+            asset: captureMax-macos.zip
+          - os: ubuntu-22.04  # older glibc = binary runs on more distros
+            bin: dist/captureMax
+            package: tar -czf captureMax-linux.tar.gz -C dist captureMax
+            asset: captureMax-linux.tar.gz
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
@@ -17,13 +38,50 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt pyinstaller==6.22.3
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libxkbcommon0 libpulse0
 
-      - name: Build exe
-        run: pyinstaller --onefile --windowed --name captureMax --icon assets/icon.ico --add-data "assets;assets" capturemax.py
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyinstaller==6.22.3 pillow
+
+      - name: Build
+        run: pyinstaller --noconfirm captureMax.spec
+
+      - name: Smoke test (app must still be running after 10 s)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python - "${{ matrix.bin }}" <<'EOF'
+          import subprocess, sys, time
+          p = subprocess.Popen([sys.argv[1]])
+          time.sleep(10)
+          code = p.poll()
+          p.kill()
+          sys.exit(f"app exited early with code {code}" if code is not None else 0)
+          EOF
+
+      - name: Package
+        run: ${{ matrix.package }}
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: release
+          merge-multiple: true
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/captureMax.exe --title "captureMax ${{ github.ref_name }}" --generate-notes
+        run: >
+          gh release create "${{ github.ref_name }}" release/*
+          --repo "${{ github.repository }}" --title "captureMax ${{ github.ref_name }}" --generate-notes
