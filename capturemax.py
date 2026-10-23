@@ -2,21 +2,21 @@
 import functools
 import json
 import sys
-import threading
 import time
-import urllib.request
 from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import (QByteArray, QEasingCurve, QEvent, QLocale, QPoint, QPointF, QPropertyAnimation, QRect,
-                            QSettings, QSize, Qt, QTimer, QUrl, QVariantAnimation, Signal)
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPalette, QPixmap
+                            QRectF, QSettings, QSize, Qt, QTimer, QUrl, QVariantAnimation)
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtMultimedia import (QAudioFormat, QAudioSink, QAudioSource, QCamera, QMediaCaptureSession,
-                                  QMediaDevices, QVideoFrameFormat, QVideoSink)
+                                  QMediaDevices, QVideoFrame, QVideoFrameFormat, QVideoSink)
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PySide6.QtQuickWidgets import QQuickWidget
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QFrame, QGraphicsDropShadowEffect,
-                               QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout, QMessageBox, QProxyStyle,
-                               QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStylePainter,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QGraphicsOpacityEffect, QGridLayout, QHBoxLayout, QLabel, QLayout, QMessageBox,
+                               QProxyStyle, QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox,
+                               QStylePainter, QToolButton, QVBoxLayout, QWidget)
 
 APP = "captureMax"
 VERSION = "dev"  # release builds: CI writes the git tag here (.github/workflows/release.yml)
@@ -24,9 +24,11 @@ REPO = "maxschroers/captureMax"
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
 ACCENT, ACCENT_HOVER, ACCENT_DEEP = "#3d7bff", "#5b8fff", "#2f6bff"
 BG, SURFACE, FIELD, TRACK = "#07090f", "#0e121c", "#151b29", "#232b3d"
-HAIRLINE, GLASS = "rgba(255, 255, 255, 18)", "rgba(7, 9, 15, 210)"
+HAIRLINE = "rgba(255, 255, 255, 18)"
 TEXT, MUTED, DIM = "#eef2fb", "#a3adc4", "#4a556e"
 DANGER = "#e5484d"
+DC_BUTTON, DC_BUTTON_HOVER, DC_RED, DC_RED_HOVER = "#2b2d31", "#404249", "#da373c", "#a12d2f"  # Discord stream UI
+DC_TEXT, DC_TOOLTIP = "#dbdee1", "#111214"
 STATUS_COLORS = {"idle": MUTED, "ok": "#34d399", "err": "#f87171"}
 JPEG = QVideoFrameFormat.PixelFormat.Format_Jpeg
 LANGS = {"de": "Deutsch", "en": "English"}
@@ -55,6 +57,9 @@ TR = {
         "update": "Update auf v{} verfügbar",
         "update_ask": "Version {} ist verfügbar (installiert: {}).\nJetzt herunterladen?", "yes": "Ja", "no": "Nein",
         "discard": "Einstellungen wurden geändert. Ohne Speichern schließen?",
+        "tip_stop": "Stream beenden", "tip_mute": "Ton aus (M)", "tip_unmute": "Ton an (M)",
+        "tip_settings": "Einstellungen", "tip_info": "Auflösung & FPS", "tip_full": "Vollbild (F)",
+        "tip_window": "Vollbild beenden (Esc)", "tip_volume": "Lautstärke (↑ ↓)",
     },
     "en": {
         "subtitle": "capture card & webcam viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ADVANCED",
@@ -70,6 +75,9 @@ TR = {
         "update": "Update to v{} available",
         "update_ask": "Version {} is available (installed: {}).\nDownload it now?", "yes": "Yes", "no": "No",
         "discard": "Settings were changed. Close without saving?",
+        "tip_stop": "Stop stream", "tip_mute": "Mute (M)", "tip_unmute": "Unmute (M)", "tip_settings": "Settings",
+        "tip_info": "Resolution & FPS", "tip_full": "Fullscreen (F)", "tip_window": "Exit fullscreen (Esc)",
+        "tip_volume": "Volume (↑ ↓)",
     },
 }
 
@@ -81,8 +89,8 @@ ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
     "camera": '<path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
     "wave": '<path d="M2 12h1M6 9v6M10 5v14M14 8v8M18 10v4M21 12h1"/>',
     "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
-    "fullscreen": '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
-    "windowed": '<path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"/>',
+    "fullscreen": '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',  # Discord-style corner brackets
+    "windowed": '<path d="M9 4v5H4M15 4v5h5M15 20v-5h5M9 20v-5H4"/>',
     "settings": '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/>'
                 '<circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/>',
 }
@@ -101,7 +109,7 @@ QLabel[role="hint"]:disabled {{ color: {DIM}; }}
 QComboBox {{ background: {FIELD}; border: 1px solid {HAIRLINE}; border-radius: 8px; padding: 0 12px;
              min-height: 32px; combobox-popup: 0; }}
 QComboBox:hover {{ border-color: rgba(255, 255, 255, 40); }}
-QComboBox:on {{ border-color: {ACCENT}; }}
+QComboBox:on, QComboBox:focus {{ border-color: {ACCENT}; }}
 QComboBox:disabled {{ color: {DIM}; border-color: {HAIRLINE}; }}
 QComboBox::drop-down {{ border: none; width: 28px; }}
 QComboBox::down-arrow {{ image: url("{(ASSETS / "chevron.svg").as_posix()}"); width: 12px; height: 12px; }}
@@ -118,6 +126,7 @@ QSlider::sub-page:horizontal {{ background: qlineargradient(x1: 0, y1: 0, x2: 1,
 QSlider::handle:horizontal {{ background: #fff; border: 3px solid {ACCENT}; width: 10px; height: 10px;
                               margin: -6px 0; border-radius: 8px; }}
 QSlider::handle:horizontal:hover {{ border-color: {ACCENT_HOVER}; }}
+QSlider::handle:horizontal:focus {{ border-color: #fff; }}  /* keyboard focus (WCAG 2.4.7) */
 QSlider::sub-page:horizontal:disabled {{ background: {TRACK}; }}
 QSlider::handle:horizontal:disabled {{ background: {DIM}; border-color: {TRACK}; }}
 QPushButton#start {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT_DEEP},
@@ -127,6 +136,8 @@ QPushButton#start {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, sto
 QPushButton#start:hover {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT},
                                                        stop: 1 #7aa6ff); }}
 QPushButton#start:pressed {{ background: {ACCENT_DEEP}; }}
+QPushButton#start:focus {{ border: 2px solid #fff; }}
+QPushButton#start:disabled {{ background: {FIELD}; color: {DIM}; }}
 QLabel#status {{ background: {SURFACE}; border: 1px solid {HAIRLINE}; border-radius: 16px; min-height: 30px;
                  padding: 0 16px; font-size: 13px; }}
 QPushButton#update {{ background: rgba(61, 123, 255, 40); border: 1px solid {ACCENT}; border-radius: 16px;
@@ -135,14 +146,28 @@ QPushButton#update:hover {{ background: rgba(61, 123, 255, 80); }}
 QMessageBox {{ background: {SURFACE}; }}
 QMessageBox QPushButton {{ background: {FIELD}; border: 1px solid {HAIRLINE}; border-radius: 8px; min-height: 30px;
                            min-width: 80px; padding: 0 16px; }}
-QMessageBox QPushButton:hover {{ border-color: {ACCENT}; }}
-QFrame#bar {{ background: {GLASS}; border: 1px solid {HAIRLINE}; border-radius: 18px; }}
-QToolButton {{ background: transparent; border: none; border-radius: 10px; min-width: 40px; min-height: 36px; }}
-QToolButton:hover {{ background: rgba(255, 255, 255, 20); }}
-QToolButton:checked {{ background: rgba(61, 123, 255, 70); }}
-QToolButton#stop:hover {{ background: rgba(229, 72, 77, 45); }}
-QLabel#info {{ background: {GLASS}; border: 1px solid {HAIRLINE}; border-radius: 10px; padding: 6px 12px;
-               font-family: "Cascadia Mono", "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 13px; }}
+QMessageBox QPushButton:hover, QMessageBox QPushButton:focus {{ border-color: {ACCENT}; }}
+QPushButton#update:focus {{ border: 2px solid #fff; }}
+QFrame#bar {{ background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 rgba(0, 0, 0, 0),
+                                          stop: 1 rgba(0, 0, 0, 200)); border: none; }}
+QFrame#bar QToolButton {{ background: transparent; border: none; border-radius: 6px; min-width: 36px;
+                          min-height: 36px; }}
+QFrame#bar QToolButton:hover, QFrame#bar QToolButton:checked {{ background: rgba(255, 255, 255, 26); }}
+QFrame#bar QToolButton#round {{ background: {DC_BUTTON}; border-radius: 24px; min-width: 48px; min-height: 48px; }}
+QFrame#bar QToolButton#round:hover {{ background: {DC_BUTTON_HOVER}; }}
+QFrame#bar QToolButton#stop {{ background: {DC_RED}; border-radius: 24px; min-width: 48px; min-height: 48px; }}
+QFrame#bar QToolButton#stop:hover {{ background: {DC_RED_HOVER}; }}
+QFrame#bar QToolButton:focus {{ border: 2px solid #fff; }}
+QFrame#bar QLabel {{ color: {DC_TEXT}; font-size: 13px; }}
+QFrame#bar QLabel#title {{ color: #fff; font-size: 15px; font-weight: 600; }}
+QFrame#bar QLabel#live {{ background: {DC_RED}; color: #fff; border-radius: 4px; padding: 1px 6px;
+                          font-size: 11px; font-weight: bold; }}
+QFrame#bar QSlider::sub-page:horizontal {{ background: {ACCENT}; }}
+QFrame#bar QSlider::handle:horizontal {{ border: none; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }}
+QLabel#info {{ background: rgba(0, 0, 0, 150); border-radius: 4px; padding: 4px 8px; color: {DC_TEXT};
+               font-family: "Cascadia Mono", "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 12px; }}
+QToolTip {{ background: {DC_TOOLTIP}; color: {DC_TEXT}; border: none; padding: 6px 10px; font-size: 13px;
+            font-weight: 600; }}
 """
 
 
@@ -150,9 +175,9 @@ def svg_icon(svg):
     return QIcon(QPixmap.fromImage(QImage.fromData(QByteArray(svg.encode()), "SVG")))
 
 
-def icon(name, color=TEXT):
+def icon(name, color=TEXT, weight=2):
     return svg_icon(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
-                    f'stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+                    f'stroke="{color}" stroke-width="{weight}" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
 
 
 def flag(lang):
@@ -235,6 +260,7 @@ class Toggle(QAbstractButton):
         self.setCheckable(True)
         self.setChecked(checked)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # Tab + Space; a mouse click doesn't leave a focus ring
         self.pos_ = float(checked)  # knob position 0..1, slides on toggle
         self.anim = QVariantAnimation(self, duration=160, easingCurve=QEasingCurve.Type.OutCubic)
         self.anim.valueChanged.connect(self.slide)
@@ -263,6 +289,10 @@ class Toggle(QAbstractButton):
         p.drawRoundedRect(0, 2, 38, 20, 10, 10)
         p.setBrush(QColor("#fff"))
         p.drawEllipse(QPointF(10 + 18 * self.pos_, 12), 8, 8)
+        if self.hasFocus():  # keyboard focus ring (WCAG 2.4.7)
+            p.setPen(QPen(QColor("#fff"), 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(QRectF(1, 3, 36, 18), 9, 9)
         p.setPen(QColor(TEXT))
         p.drawText(QRect(48, 0, self.width() - 48, self.height()), Qt.AlignmentFlag.AlignVCenter, self.text())
 
@@ -302,43 +332,60 @@ class Combo(QComboBox):
 
 
 class Live(QWidget):
-    """Video window: paints frames aspect-fit, hover bar with stop / mute / volume / info / settings / fullscreen."""
+    """Video window: paints frames aspect-fit. Hover controls styled after Discord's stream viewer: full-width bottom
+    gradient, LIVE badge + device left, round settings / mute / red stop centred, volume / info / fullscreen right."""
 
     def __init__(self, main):
         super().__init__()
-        self.main, self.frame, self.image = main, None, QImage()
-        self.setWindowTitle(f"{APP} - Live")
+        self.main, self.frame, self.image, self.frame_size = main, None, QImage(), QSize()
+        self.setWindowTitle(f"{APP} – Live")
         self.resize(1280, 720)
+        self.setMinimumSize(800, 360)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # on activation the window takes focus (shortcuts), not a button
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self.gpu = self.gpu_surface()  # created first, so the overlays below stack on top of it
         self.bar = QFrame(self, objectName="bar")
-        lay = QHBoxLayout(self.bar)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(8)
-        self.mute = QToolButton(iconSize=QSize(20, 20))
+        self.grid = QGridLayout(self.bar)
+        self.grid.setContentsMargins(20, 56, 20, 18)  # tall top margin: room for the gradient to fade in
+        self.sides = left, mid, right = QHBoxLayout(), QHBoxLayout(), QHBoxLayout()
+        for col, lay in enumerate(self.sides):
+            lay.setSpacing(10 if col == 1 else 6)
+            self.grid.addLayout(lay, 0, col, (Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignCenter,
+                                              Qt.AlignmentFlag.AlignRight)[col] | Qt.AlignmentFlag.AlignVCenter)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(2, 1)
+
+        left.addWidget(QLabel("LIVE", objectName="live"))
+        self.title = QLabel(objectName="title")
+        left.addWidget(self.title)
+
+        self.gear = QToolButton(icon=icon("settings", DC_TEXT), iconSize=QSize(22, 22), objectName="round")
+        self.gear.clicked.connect(main.toggle_settings)
+        self.mute = QToolButton(iconSize=QSize(22, 22), objectName="round")
         self.mute.clicked.connect(main.listen.toggle)
+        self.stop_btn = QToolButton(icon=icon("stop", "#fff"), iconSize=QSize(22, 22), objectName="stop")
+        self.stop_btn.clicked.connect(main.stop)
+        for w in (self.gear, self.mute, self.stop_btn):
+            mid.addWidget(w)
+
         self.vol = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=100)
-        self.vol.setFixedWidth(200)
+        self.vol.setFixedWidth(120)
         self.vol.valueChanged.connect(main.vol.setValue)
-        self.pct = label()
-        self.pct.setFixedWidth(52)
-        gear = QToolButton(icon=icon("settings"), iconSize=QSize(20, 20))
-        gear.clicked.connect(main.toggle_settings)
-        stop = QToolButton(icon=icon("stop", DANGER), iconSize=QSize(20, 20), objectName="stop")
-        stop.clicked.connect(main.stop)
+        self.pct = QLabel()
+        self.pct.setFixedWidth(40)
         self.info = QLabel(self, objectName="info")
-        info = QToolButton(icon=icon("info"), iconSize=QSize(20, 20), checkable=True)
-        info.toggled.connect(self.info.setVisible)
-        info.toggled.connect(lambda on: main.st.setValue("info", on))
-        info.setChecked(main.st.value("info", False, type=bool))
-        self.info.setVisible(info.isChecked())
-        self.full = QToolButton(icon=icon("fullscreen"), iconSize=QSize(20, 20))
+        self.info_btn = QToolButton(icon=icon("info", DC_TEXT), iconSize=QSize(22, 22), checkable=True)
+        self.info_btn.toggled.connect(self.info.setVisible)
+        self.info_btn.toggled.connect(lambda on: main.st.setValue("info", on))
+        self.info_btn.setChecked(main.st.value("info", False, type=bool))
+        self.info.setVisible(self.info_btn.isChecked())
+        self.full = QToolButton(icon=icon("fullscreen", DC_TEXT, 2.5), iconSize=QSize(22, 22))
         self.full.clicked.connect(self.toggle_fullscreen)
-        for w in (stop, self.mute, self.vol, self.pct):  # stream + audio left, view controls right
-            lay.addWidget(w)
-        lay.addSpacing(16)
-        for w in (info, gear, self.full):
-            lay.addWidget(w)
+        for w in (self.vol, self.pct, self.info_btn, self.full):
+            right.addWidget(w)
+        for w in (self.gear, self.mute, self.stop_btn, self.vol, self.info_btn, self.full):
+            w.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # reachable by keyboard, no focus ring after a click
         self.bar.hide()
         self.bar.installEventFilter(self)
         self.fade = QGraphicsOpacityEffect(self.bar, opacity=0)
@@ -347,13 +394,45 @@ class Live(QWidget):
         self.fader.finished.connect(self.faded)
         self.hider = QTimer(self, singleShot=True, interval=1500)
         self.hider.timeout.connect(lambda: self.fade_to(0, 250))
+        if geo := main.st.value("geo_live"):  # last size + position, opened windowed
+            self.restoreGeometry(geo)
+            self.setWindowState(Qt.WindowState.WindowNoState)
         dark_titlebar(self)
 
-    def show_frame(self, frame):
-        self.frame = frame
-        self.update()
+    def gpu_surface(self):
+        """QML VideoOutput in a QQuickWidget: YUV -> RGB and scaling on the GPU (Qt RHI) instead of toImage() +
+        drawImage on the GUI thread (~1 CPU core at 1080p). Not a native window, so the overlays still composite on
+        top. Returns its video sink, or None to fall back to CPU painting (no usable GPU, e.g. some RDP sessions)."""
+        view = QQuickWidget(self)
+        view.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)  # mouse stays with Live (bar, cursor)
+        view.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # and so do the keys (shortcuts)
+        view.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+        view.setClearColor(Qt.GlobalColor.black)
+        view.setSource(QUrl.fromLocalFile(str(ASSETS / "live.qml")))
+        sink = view.rootObject().findChild(QVideoSink) if view.status() == QQuickWidget.Status.Ready else None
+        if sink is None:
+            print("captureMax: GPU video surface unavailable, using CPU rendering:",
+                  *(e.toString() for e in view.errors()), file=sys.stderr)
+            view.deleteLater()
+            return None
+        self.view = view
+        return sink
 
-    def paintEvent(self, _):
+    def show_frame(self, frame):
+        self.frame_size = frame.size()
+        if self.gpu:
+            self.gpu.setVideoFrame(frame)  # the scene graph renders it at the next vsync
+            self.main.shown += 1
+        else:
+            self.frame = frame
+            self.update()
+
+    def clear(self):
+        self.frame, self.image, self.frame_size = None, QImage(), QSize()
+        if self.gpu:
+            self.gpu.setVideoFrame(QVideoFrame())
+
+    def paintEvent(self, _):  # CPU fallback only; with the GPU surface it just paints black once under it
         if self.frame is not None:  # convert only frames that actually get painted; update() coalesces the rest
             self.image, self.frame = self.frame.toImage(), None
             self.main.shown += 1
@@ -366,8 +445,12 @@ class Live(QWidget):
             p.drawImage(r, self.image)
 
     def reveal(self):
-        self.bar.adjustSize()
-        self.bar.move((self.width() - self.bar.width()) // 2, self.height() - self.bar.height() - 24)
+        side = max(self.sides[0].sizeHint().width(), self.sides[2].sizeHint().width())
+        for col in (0, 2):  # equal side columns keep the round buttons exactly centred
+            self.grid.setColumnMinimumWidth(col, side)
+        height = self.bar.sizeHint().height()
+        self.bar.setGeometry(0, self.height() - height, self.width(), height)
+        self.unsetCursor()
         self.bar.show()
         if self.fader.endValue() != 1:  # hidden or fading out
             self.fade_to(1, 150)
@@ -384,6 +467,8 @@ class Live(QWidget):
         """Effect off once fully visible: it re-renders the bar offscreen on every video frame otherwise."""
         if self.fade.opacity() == 0:
             self.bar.hide()
+            if self.isFullScreen():  # like Discord: an idle mouse disappears in fullscreen
+                self.setCursor(Qt.CursorShape.BlankCursor)
         self.fade.setEnabled(self.fade.opacity() < 1)
 
     def mouseMoveEvent(self, _):
@@ -399,6 +484,8 @@ class Live(QWidget):
         self.info.move(self.width() - self.info.width() - 16, 16)
 
     def resizeEvent(self, _):
+        if self.gpu:
+            self.view.setGeometry(self.rect())
         self.set_info(self.info.text())
         if self.bar.isVisible():
             self.reveal()
@@ -416,24 +503,49 @@ class Live(QWidget):
 
     def changeEvent(self, ev):
         if ev.type() == QEvent.Type.WindowStateChange:
-            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen"))
+            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen", DC_TEXT, 2.5))
+            self.retranslate()
+
+    def retranslate(self):
+        """Tooltips + screen-reader names of the icon-only controls; language and state (muted, fullscreen) dependent."""
+        t = self.main.t
+        for w, key in ((self.gear, "tip_settings"), (self.stop_btn, "tip_stop"), (self.info_btn, "tip_info"),
+                       (self.mute, "tip_mute" if self.main.listen.isChecked() else "tip_unmute"),
+                       (self.full, "tip_window" if self.isFullScreen() else "tip_full"), (self.vol, "tip_volume")):
+            w.setToolTip(t(key))
+            w.setAccessibleName(t(key))
 
     def mouseDoubleClickEvent(self, _):
         self.toggle_fullscreen()
 
     def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key.Key_F11:
+        """Player conventions (YouTube / Discord): F / F11 fullscreen, M mute, arrows volume. Esc only leaves
+        fullscreen; stopping the stream is never on a reflex key."""
+        key = ev.key()
+        if key in (Qt.Key.Key_F, Qt.Key.Key_F11):
             self.toggle_fullscreen()
-        elif ev.key() == Qt.Key.Key_Escape:
-            self.showNormal() if self.isFullScreen() else self.close()
+        elif key == Qt.Key.Key_Escape and self.isFullScreen():
+            self.showNormal()
+        elif key == Qt.Key.Key_M:
+            self.main.listen.toggle()
+            self.reveal()
+        elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.main.vol.setValue(self.main.vol.value() + (5 if key == Qt.Key.Key_Up else -5))
+            self.reveal()  # show the slider moving
+        else:
+            super().keyPressEvent(ev)
+
+    def showEvent(self, _):
+        self.setFocus()  # Qt restores this on activation; otherwise it focuses (and rings) the first bar button
+
+    def hideEvent(self, _):
+        self.main.st.setValue("geo_live", self.saveGeometry())
 
     def closeEvent(self, _):
         self.main.stop()
 
 
 class Main(QWidget):
-    update_found = Signal(str)  # emitted from the update-check thread, delivered on the GUI thread
-
     def __init__(self):
         super().__init__(objectName="main")
         self.setWindowTitle(APP)
@@ -519,13 +631,16 @@ class Main(QWidget):
         foot.addWidget(label(VERSION if VERSION == "dev" else f"v{VERSION}"))
         root.addLayout(foot)
         self.latest = None
-        self.update_found.connect(self.show_update)
 
         self.live = Live(self)
         self.video.currentIndexChanged.connect(self.fill_res)
         self.video.currentIndexChanged.connect(self.match_audio)
         self.video.currentIndexChanged.connect(self.match_exposure)
         self.res.currentIndexChanged.connect(self.fill_fps)
+        for sig in (self.video.currentIndexChanged, self.res.currentIndexChanged, self.fps.currentIndexChanged,
+                    self.ain.currentIndexChanged, self.aout.currentIndexChanged, self.buf.valueChanged,
+                    self.exp.valueChanged, self.auto_exp.toggled):  # connected last: runs after the cascades above
+            sig.connect(self.update_save)
         self.vol.valueChanged.connect(self.apply_audio)
         self.listen.toggled.connect(self.apply_audio)
         self.buf.valueChanged.connect(self.update_labels)
@@ -542,9 +657,12 @@ class Main(QWidget):
         self.ticker = QTimer(self, interval=1000)
         self.ticker.timeout.connect(self.tick)
         self.ticker.start()
+        if geo := self.st.value("geo_main"):  # position of the last session (Qt keeps it on a connected screen)
+            self.restoreGeometry(geo)
         dark_titlebar(self)
+        self.net = QNetworkAccessManager(self)
         if VERSION != "dev":
-            threading.Thread(target=self.check_update, daemon=True).start()
+            self.check_update()
 
     # ---- building blocks
     def tr_(self, widget, key):
@@ -622,7 +740,9 @@ class Main(QWidget):
             self.show_settings()
         self.status_key, self.status_args, self.status_kind = key, args, kind
         self.status.setText(f"●  {self.t(key, *args)}")
-        self.status.setStyleSheet(f"color: {STATUS_COLORS[kind]};")
+        if self.status.property("kind") != kind:  # restyling is costly; the running status updates every second
+            self.status.setProperty("kind", kind)
+            self.status.setStyleSheet(f"color: {STATUS_COLORS[kind]};")
 
     # ---- devices
     def refresh(self):
@@ -637,6 +757,13 @@ class Main(QWidget):
             "audio_out", QMediaDevices.defaultAudioOutput().description()))
         self.fill_res()
         self.match_exposure()
+        self.update_save()
+
+    def update_save(self):
+        """While live, "Save" restarts the stream (black for a moment): only offer it when something changed."""
+        on = not self.camera or self.state() != self.saved
+        self.btn.setEnabled(on)
+        self.btn.graphicsEffect().setEnabled(on)  # no blue glow under a disabled button
 
     def match_exposure(self):
         """Exposure controls only for webcams: a capture card passes its source's picture through as is.
@@ -680,7 +807,7 @@ class Main(QWidget):
     # ---- capture
     def start(self):
         """Start, or while running ("Save" from the hover bar's settings) restart with the new settings."""
-        if not self.cams or not self.res.currentText():
+        if not self.cams or not self.res.currentText() or not self.fps.currentText():
             return self.set_status("no_device", kind="err")
         self.stop()
         self.save()
@@ -706,12 +833,14 @@ class Main(QWidget):
         self.last_frame = self.t0
         self.set_status("starting")
         self.camera.start()
-        self.live.frame, self.live.image = None, QImage()
+        self.live.clear()
         self.live.set_info("…")
+        self.live.title.setText(dev.description())
         self.live.show()
         self.live.raise_()
         self.hide()
         self.btn.setText(self.t("save"))
+        self.update_save()
 
     def start_audio(self, dev_in, dev_out):
         """Own source -> sink pump instead of the capture session's audio path, which crackles. 48 kHz stereo when
@@ -754,6 +883,7 @@ class Main(QWidget):
         self.frames.clear()
         self.live.hide()
         self.btn.setText(self.t("start"))
+        self.update_save()
         if self.status_kind != "err":
             self.set_status("ready")
         self.show_settings()
@@ -790,7 +920,7 @@ class Main(QWidget):
         if now - self.last_frame > 3:
             self.set_status("no_frames", kind="err")
         elif self.shown:
-            size, fps = self.live.image.size(), self.shown / (now - self.t0)
+            size, fps = self.live.frame_size, self.shown / (now - self.t0)
             self.set_status("running", f"{size.width()}x{size.height()}", fps, kind="ok")
             self.live.set_info(f"{size.width()}x{size.height()}  ·  {fps:.0f} fps")
         self.shown, self.t0 = 0, now
@@ -801,21 +931,34 @@ class Main(QWidget):
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
         self.live.pct.setText(f"{vol} %")
-        self.live.mute.setIcon(icon("volume" if on else "muted"))
+        self.live.mute.setIcon(icon("volume", DC_TEXT) if on else icon("muted", DC_RED))
+        self.live.retranslate()
         self.aout.setEnabled(on)
         if self.speaker:
             self.speaker.setVolume(vol / 100 if on else 0)
 
     # ---- updates
     def check_update(self):
-        """Runs in a thread: ask GitHub for the latest release, stay silent when offline / rate-limited."""
+        """Ask GitHub for the latest release, async. QtNetwork uses the OS's TLS + certificate store; a frozen Python's
+        ssl module can't find CA certificates on macOS / some Linux distros."""
+        req = QNetworkRequest(QUrl(f"https://api.github.com/repos/{REPO}/releases/latest"))
+        req.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, f"{APP}/{VERSION}")  # GitHub requires one
+        req.setTransferTimeout(5000)
+        self.net.get(req).finished.connect(self.update_reply)
+
+    def update_reply(self):
+        """Silent on any failure (offline, rate-limited, odd tag): the update hint is a nicety, not a feature."""
+        reply = self.sender()
+        reply.deleteLater()
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            return
         try:
-            with urllib.request.urlopen(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=5) as r:
-                latest = json.load(r)["tag_name"].lstrip("v")
-            if version_key(latest) > version_key(VERSION):
-                self.update_found.emit(latest)
-        except Exception:
-            pass
+            latest = json.loads(bytes(reply.readAll()))["tag_name"].lstrip("v")
+            newer = version_key(latest) > version_key(VERSION)
+        except (ValueError, KeyError):
+            return
+        if newer:
+            self.show_update(latest)
 
     def show_update(self, latest):
         self.latest = latest
@@ -864,6 +1007,7 @@ class Main(QWidget):
             ev.ignore()
             return self.hide_settings()
         self.save()
+        self.st.setValue("geo_main", self.saveGeometry())
         self.stop()
         QApplication.quit()
 

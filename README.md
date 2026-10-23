@@ -14,12 +14,18 @@
   real formats, and compressed formats (MJPG) are preferred automatically so USB devices reach full frame rate.
 - **Audio monitoring**: plays the capture card's audio (48 kHz stereo) on any output. Volume and mute work live.
   The audio input follows the video device automatically.
-- **Hover bar**: move the mouse over the live window for stop, mute, volume, info (resolution and live fps, top
-  right), settings and fullscreen. It fades out when the mouse rests.
-- **Fullscreen** with the hover-bar button, `F11` or a double-click. No window frame, so a Discord window share
-  shows only the picture.
+- **Discord-style controls**: move the mouse over the live window for a bottom bar like Discord's stream viewer:
+  LIVE badge and device, round settings / mute / red stop buttons in the middle, volume, info (resolution and live
+  fps) and fullscreen on the right, with tooltips. It fades out when the mouse rests; in fullscreen the cursor hides
+  too.
+- **Fullscreen** with the button, `F`, `F11` or a double-click. No window frame, so a Discord window share shows
+  only the picture.
+- **GPU rendering**: colour conversion and scaling run on the graphics card (Qt Quick / RHI), which roughly halves
+  the CPU load in fullscreen. Falls back to CPU drawing where no GPU is available.
+- **Keyboard friendly**: visible focus on every control, `M` mute, `↑`/`↓` volume, screen-reader names for the icon
+  buttons. Both windows reopen where you left them.
 - **Settings while live**: the gear opens and closes the settings over the running stream. *Save* restarts with
-  the new settings; closing without saving asks before discarding changes.
+  the new settings (it's only enabled once something changed); closing without saving asks before discarding.
 - **Low latency** by default, with an optional video delay (0–2000 ms) to line up picture and sound.
 - **Webcam tuning**: manual exposure for higher frame rates in low light (Windows and Linux). On Windows the
   exposure controls only appear for webcams; capture cards don't have any.
@@ -42,8 +48,14 @@ Grab the build for your system from the [latest release](../../releases/latest):
 
 1. **VIDEO**: pick the device, resolution and FPS.
 2. **AUDIO**: pick the input (usually the capture card, or *Off*) and your speakers or headset.
-3. Click **Start**. `F11` or a double-click toggles fullscreen; `Esc` leaves fullscreen, or stops when windowed.
-   Closing the live window stops too.
+3. Click **Start**. Stop with the red button or by closing the live window.
+
+| Key | Action |
+|---|---|
+| `F` / `F11` / double-click | Fullscreen on / off |
+| `Esc` | Leave fullscreen |
+| `M` | Mute / unmute |
+| `↑` / `↓` | Volume ± 5 % |
 
 The status bar (and the info overlay) shows the real resolution and frame rate.
 
@@ -55,6 +67,7 @@ Python 3.12:
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt        # Windows: .venv\Scripts\pip ...
 .venv/bin/python capturemax.py
+.venv/bin/python -m unittest discover tests      # logic tests (CI runs them before every build)
 ```
 
 ## Build locally
@@ -97,6 +110,7 @@ Bug reports, ideas and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBU
 | Exposure control greyed out | macOS offers no exposure control for USB cameras. Some Linux cameras don't either. |
 | Exposure controls missing (Windows) | The device reports no camera control, so it's treated as a capture card. Capture cards pass the source's picture through and have no exposure. |
 | Audio and video out of sync | Raise **Delay** until they match. |
+| High CPU load | Without a usable GPU (some remote-desktop sessions, missing graphics driver) the live view falls back to CPU drawing. Update the graphics driver. |
 
 ## License
 

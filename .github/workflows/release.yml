@@ -46,6 +46,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt pyinstaller==6.22.3 pillow
 
+      - name: Logic tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover tests -v
+
       - name: Stamp version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: sed -i.bak "s/^VERSION = \"dev\"/VERSION = \"${GITHUB_REF_NAME#v}\"/" capturemax.py
