@@ -1122,9 +1122,10 @@ class Main(QWidget):
 
     def apply_audio(self):
         """Settings card and hover bar share the volume; the sink follows it, the hover mute and the saved
-        "Enable output" (the settings toggle only greys out the output field until Save)."""
+        "Enable output" (the settings toggle only greys out output and volume until Save)."""
         vol = self.vol.value()
-        self.aout.setEnabled(self.listen.isChecked())
+        for w in (self.aout, self.vol, self.vol_lbl):
+            w.setEnabled(self.listen.isChecked())
         on = (self.saved[8] if self.camera else self.listen.isChecked()) and not self.muted
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
