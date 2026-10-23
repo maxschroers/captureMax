@@ -444,6 +444,7 @@ class Main(QWidget):
         self.session = self.camera = self.mic = self.speaker = None
         self.frames, self.shown, self.last_frame, self.t0 = deque(), 0, 0.0, 0.0
         self.status_key, self.status_args, self.status_kind = "ready", (), "idle"
+        self.exp_dev = None  # device the exposure controls were last set up for
         self.sink = QVideoSink(self)
         self.sink.videoFrameChanged.connect(self.on_frame)
 
@@ -638,11 +639,15 @@ class Main(QWidget):
         self.match_exposure()
 
     def match_exposure(self):
-        """Exposure controls only for webcams: a capture card passes its source's picture through as is."""
+        """Exposure controls only for webcams: a capture card passes its source's picture through as is.
+        A webcam starts on auto exposure; manual holds until the next device switch (not on refresh / language)."""
         name = self.video.currentText()
         webcam = sys.platform != "win32" or not name or windows_has_exposure(name)
         for w in (self.auto_exp, self.exp_lbl, self.exp):
             w.setVisible(webcam)
+        if webcam and name != self.exp_dev:
+            self.auto_exp.setChecked(True)
+        self.exp_dev = name
 
     def match_audio(self):
         """Capture cards / webcams show up as an audio input named after the camera ("Mikrofon (2- USB Capture)")."""
