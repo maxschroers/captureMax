@@ -4,7 +4,9 @@
 
 <p align="center">Low-latency live viewer for capture cards and webcams on Windows, macOS and Linux. No OBS, no VLC, one app.</p>
 
-![captureMax settings window with the device picker open](docs/screenshot.png)
+![captureMax settings window](docs/screenshot.png)
+
+![captureMax settings window with the device picker open](docs/picker.png)
 
 ![captureMax live view with Discord-style controls, volume bar and quality badge](docs/live.png)
 
