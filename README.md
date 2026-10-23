@@ -6,7 +6,7 @@
 
 ![captureMax settings window](docs/screenshot.png)
 
-![captureMax live view with hover bar and info overlay](docs/live.png)
+![captureMax live view with Discord-style controls, volume bar and quality badge](docs/live.png)
 
 ## Features
 
@@ -14,10 +14,13 @@
   real formats, and compressed formats (MJPG) are preferred automatically so USB devices reach full frame rate.
 - **Audio monitoring**: plays the capture card's audio (48 kHz stereo) on any output. Volume and mute work live.
   The audio input follows the video device automatically.
-- **Discord-style controls**: move the mouse over the live window for a bottom bar like Discord's stream viewer:
-  LIVE badge and device, round settings / mute / red stop buttons in the middle, volume, info (resolution and live
-  fps) and fullscreen on the right, with tooltips. It fades out when the mouse rests; in fullscreen the cursor hides
-  too.
+- **Discord look**: modelled on Discord's current desktop client. The settings follow its voice & video
+  settings page (dark panels, bordered dropdowns, thin blurple sliders with a round knob, blurple switches and
+  buttons). Moving the mouse over the live window shows Discord's stream controls over a soft gradient: the
+  device's name tag on the left, the framed settings button and the red stop button in the middle, speaker and
+  fullscreen on the right, and the "1080p 60 FPS | LIVE" badge top right. Hovering the speaker raises Discord's
+  slim, rounded volume bar (click or drag to set it), a click on the speaker mutes. Everything fades out when the
+  mouse rests; in fullscreen the cursor hides too.
 - **Fullscreen** with the button, `F`, `F11` or a double-click. No window frame, so a Discord window share shows
   only the picture.
 - **GPU rendering**: colour conversion and scaling run on the graphics card (Qt Quick / RHI), which roughly halves
@@ -87,8 +90,8 @@ push and pull request. Pushing a version tag also publishes a GitHub release wit
 notes:
 
 ```sh
-git tag v0.0.8
-git push origin v0.0.8
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 The workflow writes the tag into `VERSION` in `capturemax.py` (source runs show `dev` and skip the update check).

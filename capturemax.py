@@ -8,13 +8,12 @@ from pathlib import Path
 
 from PySide6.QtCore import (QByteArray, QEasingCurve, QEvent, QLocale, QPoint, QPointF, QPropertyAnimation, QRect,
                             QRectF, QSettings, QSize, Qt, QTimer, QUrl, QVariantAnimation)
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtMultimedia import (QAudioFormat, QAudioSink, QAudioSource, QCamera, QMediaCaptureSession,
                                   QMediaDevices, QVideoFrame, QVideoFrameFormat, QVideoSink)
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtQuickWidgets import QQuickWidget
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QFrame, QGraphicsDropShadowEffect,
-                               QGraphicsOpacityEffect, QGridLayout, QHBoxLayout, QLabel, QLayout, QMessageBox,
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QGridLayout, QHBoxLayout, QLabel, QLayout, QMessageBox,
                                QProxyStyle, QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox,
                                QStylePainter, QToolButton, QVBoxLayout, QWidget)
 
@@ -22,14 +21,18 @@ APP = "captureMax"
 VERSION = "dev"  # release builds: CI writes the git tag here (.github/workflows/release.yml)
 REPO = "maxschroers/captureMax"
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
-ACCENT, ACCENT_HOVER, ACCENT_DEEP = "#3d7bff", "#5b8fff", "#2f6bff"
-BG, SURFACE, FIELD, TRACK = "#07090f", "#0e121c", "#151b29", "#232b3d"
-HAIRLINE = "rgba(255, 255, 255, 18)"
-TEXT, MUTED, DIM = "#eef2fb", "#a3adc4", "#4a556e"
-DANGER = "#e5484d"
-DC_BUTTON, DC_BUTTON_HOVER, DC_RED, DC_RED_HOVER = "#2b2d31", "#404249", "#da373c", "#a12d2f"  # Discord stream UI
-DC_TEXT, DC_TOOLTIP = "#dbdee1", "#111214"
-STATUS_COLORS = {"idle": MUTED, "ok": "#34d399", "err": "#f87171"}
+# Discord dark theme (2025 refresh), sampled from the desktop client
+ACCENT, ACCENT_HOVER, ACCENT_DEEP = "#5865f2", "#4752c4", "#3c45a5"  # blurple
+# settings, measured from Discord's "Sprach- & Videochat" page: #202024 content, #1a1a1e panels, #1c1c20 inputs with a
+# 1px #343439 border, 4px blurple slider with a round white knob, blurple switches, #2e2e33 dividers / grey buttons
+BG, SURFACE, FIELD, BORDER, TRACK, TITLEBAR = "#202024", "#1a1a1e", "#1c1c20", "#343439", "#3f3f46", "#121214"
+TEXT, HEADER, MUTED, DIM = "#dbdee1", "#f2f3f5", "#94959c", "#5c5d63"
+GREEN, GREEN_HOVER, FOCUS = "#23a55a", "#1a7f45", "#00a8fc"
+HOVER, SELECTED, GREY_BUTTON = "#2a2a2f", "#2e2e33", "#2e2e33"
+# stream viewer: black control strip, grouped buttons, red end button, grey side icons
+DC_GROUP, DC_GROUP_BORDER, DC_RED, DC_RED_HOVER = "#0a0a0c", "#26262b", "#d22d39", "#a8232d"
+DC_TEXT, DC_ICON, DC_PILL, DC_TOOLTIP = TEXT, "#d4d5d9", "#4f505a", "#111214"
+STATUS_COLORS = {"idle": MUTED, "ok": GREEN, "err": "#f23f43"}
 JPEG = QVideoFrameFormat.PixelFormat.Format_Jpeg
 LANGS = {"de": "Deutsch", "en": "English"}
 FLAGS = {  # 3:2 artwork, drawn as svg (Windows has no flag emoji)
@@ -44,7 +47,7 @@ FLAGS = {  # 3:2 artwork, drawn as svg (Windows has no flag emoji)
 
 TR = {
     "de": {
-        "subtitle": "Capture-Card- & Webcam-Viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ERWEITERT",
+        "subtitle": "Capture-Card- & Webcam-Viewer", "video": "Video", "audio": "Audio", "advanced": "Erweitert",
         "device": "Gerät", "res": "Auflösung", "fps": "FPS", "input": "Eingang", "output": "Ausgabe (Monitor)",
         "off": "Aus", "volume": "Lautstärke: {} %", "listen": "Ausgabe aktivieren",
         "delay": "Verzögerung: {} ms", "low_latency": "  (Low-Latency)", "auto_exp": "Auto-Belichtung (Webcam)",
@@ -58,11 +61,11 @@ TR = {
         "update_ask": "Version {} ist verfügbar (installiert: {}).\nJetzt herunterladen?", "yes": "Ja", "no": "Nein",
         "discard": "Einstellungen wurden geändert. Ohne Speichern schließen?",
         "tip_stop": "Stream beenden", "tip_mute": "Ton aus (M)", "tip_unmute": "Ton an (M)",
-        "tip_settings": "Einstellungen", "tip_info": "Auflösung & FPS", "tip_full": "Vollbild (F)",
+        "tip_settings": "Einstellungen", "tip_full": "Vollbild (F)",
         "tip_window": "Vollbild beenden (Esc)", "tip_volume": "Lautstärke (↑ ↓)",
     },
     "en": {
-        "subtitle": "capture card & webcam viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ADVANCED",
+        "subtitle": "capture card & webcam viewer", "video": "Video", "audio": "Audio", "advanced": "Advanced",
         "device": "Device", "res": "Resolution", "fps": "FPS", "input": "Input", "output": "Output (monitor)",
         "off": "Off", "volume": "Volume: {} %", "listen": "Enable output",
         "delay": "Delay: {} ms", "low_latency": "  (low latency)", "auto_exp": "Auto exposure (webcam)",
@@ -76,21 +79,20 @@ TR = {
         "update_ask": "Version {} is available (installed: {}).\nDownload it now?", "yes": "Yes", "no": "No",
         "discard": "Settings were changed. Close without saving?",
         "tip_stop": "Stop stream", "tip_mute": "Mute (M)", "tip_unmute": "Unmute (M)", "tip_settings": "Settings",
-        "tip_info": "Resolution & FPS", "tip_full": "Fullscreen (F)", "tip_window": "Exit fullscreen (Esc)",
+        "tip_full": "Fullscreen (F)", "tip_window": "Exit fullscreen (Esc)",
         "tip_volume": "Volume (↑ ↓)",
     },
 }
 
-ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
-    "volume": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',
-    "muted": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
-             '<path d="M19 5a10 10 0 0 1 0 14"/><path d="M3 3l18 18"/>',  # struck-through speaker
-    "stop": '<rect x="6" y="6" width="12" height="12" rx="2"/>',
-    "camera": '<path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
-    "wave": '<path d="M2 12h1M6 9v6M10 5v14M14 8v8M18 10v4M21 12h1"/>',
-    "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
-    "fullscreen": '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',  # Discord-style corner brackets
-    "windowed": '<path d="M9 4v5H4M15 4v5h5M15 20v-5h5M9 20v-5H4"/>',
+ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin; FILL = drawn solid in the icon's colour
+    "volume": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/>',  # Discord's
+    "muted": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
+    "screen": '<rect x="3" y="4" width="18" height="12" rx="2" fill="FILL"/><path d="M12 16v4M8 20h8"/>',
+    "stop": '<rect x="6" y="6" width="12" height="12" rx="2" fill="FILL"/>',
+    "fullscreen": '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2'
+                  'M8 20H6a2 2 0 0 1-2-2v-2"/>',  # Discord: four corners, rounded joints
+    "windowed": '<path d="M8 4v2a2 2 0 0 1-2 2H4M16 4v2a2 2 0 0 0 2 2h2M16 20v-2a2 2 0 0 1 2-2h2'
+                'M8 20v-2a2 2 0 0 0-2-2H4"/>',
     "settings": '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/>'
                 '<circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/>',
 }
@@ -98,74 +100,68 @@ ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
 QSS = f"""
 * {{ font-family: "Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans", "DejaVu Sans",
      sans-serif; font-size: 14px; color: {TEXT}; }}
-QWidget#main {{ background: qradialgradient(cx: 0.1, cy: 0, radius: 1.1, fx: 0.1, fy: 0,
-                                            stop: 0 #0c1630, stop: 0.55 {BG}, stop: 1 {BG}); }}
-QFrame#card, QFrame#head {{ background: {SURFACE}; border: 1px solid {HAIRLINE}; border-radius: 14px; }}
+QWidget#main {{ background: {BG}; }}
+QFrame#card, QFrame#head {{ background: {SURFACE}; border: none; border-radius: 8px; }}
 QLabel {{ background: transparent; }}
-QLabel[role="title"] {{ color: {MUTED}; font-size: 12px; font-weight: 600; }}
-QLabel[role="logo"] {{ font-size: 17px; font-weight: 600; }}
+QLabel[role="title"] {{ color: {HEADER}; font-size: 20px; font-weight: 600; }}
+QLabel[role="logo"] {{ color: {HEADER}; font-size: 17px; font-weight: 600; }}
+QLabel[role="label"] {{ color: {HEADER}; font-size: 14px; font-weight: 600; }}
 QLabel[role="hint"] {{ color: {MUTED}; font-size: 13px; }}
-QLabel[role="hint"]:disabled {{ color: {DIM}; }}
-QComboBox {{ background: {FIELD}; border: 1px solid {HAIRLINE}; border-radius: 8px; padding: 0 12px;
-             min-height: 32px; combobox-popup: 0; }}
-QComboBox:hover {{ border-color: rgba(255, 255, 255, 40); }}
-QComboBox:on, QComboBox:focus {{ border-color: {ACCENT}; }}
-QComboBox:disabled {{ color: {DIM}; border-color: {HAIRLINE}; }}
+QLabel[role="hint"]:disabled, QLabel[role="label"]:disabled {{ color: {DIM}; }}
+QComboBox {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 0 10px; min-height: 30px;
+             font-weight: 600; combobox-popup: 0; }}
+QComboBox:hover, QComboBox:on {{ border-color: #4a4a50; }}
+QComboBox:focus {{ border-color: {FOCUS}; }}
+QComboBox:disabled {{ color: {DIM}; }}
 QComboBox::drop-down {{ border: none; width: 28px; }}
 QComboBox::down-arrow {{ image: url("{(ASSETS / "chevron.svg").as_posix()}"); width: 12px; height: 12px; }}
-QComboBox QAbstractItemView {{ background: {SURFACE}; border: 1px solid {TRACK}; border-radius: 10px; padding: 4px;
+QComboBox QAbstractItemView {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 4px;
                                outline: none; }}
-QComboBox QAbstractItemView::item {{ min-height: 30px; padding: 0 8px; border-radius: 6px; }}
-QComboBox QAbstractItemView::item:hover {{ background: rgba(255, 255, 255, 14); }}
-QComboBox QAbstractItemView::item:selected {{ background: {ACCENT}; }}
-QComboBox#lang {{ min-height: 24px; padding: 0 8px; }}
-QSlider:horizontal {{ min-height: 22px; }}  /* room for the 16px handle, else its top gets clipped */
+QComboBox QAbstractItemView::item {{ min-height: 32px; padding: 0 8px; border-radius: 6px; font-weight: 600; }}
+QComboBox QAbstractItemView::item:hover {{ background: {HOVER}; }}
+QComboBox QAbstractItemView::item:selected {{ background: {SELECTED}; color: {HEADER}; }}
+QComboBox#lang {{ min-height: 28px; }}
+QSlider:horizontal {{ min-height: 18px; }}  /* room for the 14px knob, else it gets clipped */
 QSlider::groove:horizontal {{ height: 4px; background: {TRACK}; border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT_DEEP},
-                                                            stop: 1 {ACCENT_HOVER}); border-radius: 2px; }}
-QSlider::handle:horizontal {{ background: #fff; border: 3px solid {ACCENT}; width: 10px; height: 10px;
-                              margin: -6px 0; border-radius: 8px; }}
-QSlider::handle:horizontal:hover {{ border-color: {ACCENT_HOVER}; }}
-QSlider::handle:horizontal:focus {{ border-color: #fff; }}  /* keyboard focus (WCAG 2.4.7) */
+QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: #fff; width: 14px; height: 14px; margin: -5px 0; border-radius: 7px; }}
+QSlider::handle:horizontal:focus {{ background: {FOCUS}; }}  /* keyboard focus (WCAG 2.4.7) */
 QSlider::sub-page:horizontal:disabled {{ background: {TRACK}; }}
-QSlider::handle:horizontal:disabled {{ background: {DIM}; border-color: {TRACK}; }}
-QPushButton#start {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT_DEEP},
-                                                 stop: 1 {ACCENT_HOVER});
-                     border: none; border-radius: 12px; min-height: 48px; font-size: 16px; font-weight: 600;
-                     color: #fff; }}
-QPushButton#start:hover {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT},
-                                                       stop: 1 #7aa6ff); }}
+QSlider::handle:horizontal:disabled {{ background: {DIM}; }}
+QPushButton#start {{ background: {ACCENT}; border: none; border-radius: 8px; min-height: 40px; font-size: 14px;
+                     font-weight: 600; color: #fff; }}
+QPushButton#start:hover {{ background: {ACCENT_HOVER}; }}
 QPushButton#start:pressed {{ background: {ACCENT_DEEP}; }}
-QPushButton#start:focus {{ border: 2px solid #fff; }}
-QPushButton#start:disabled {{ background: {FIELD}; color: {DIM}; }}
-QLabel#status {{ background: {SURFACE}; border: 1px solid {HAIRLINE}; border-radius: 16px; min-height: 30px;
-                 padding: 0 16px; font-size: 13px; }}
-QPushButton#update {{ background: rgba(61, 123, 255, 40); border: 1px solid {ACCENT}; border-radius: 16px;
-                      min-height: 30px; padding: 0 14px; font-size: 13px; font-weight: 600; }}
-QPushButton#update:hover {{ background: rgba(61, 123, 255, 80); }}
-QMessageBox {{ background: {SURFACE}; }}
-QMessageBox QPushButton {{ background: {FIELD}; border: 1px solid {HAIRLINE}; border-radius: 8px; min-height: 30px;
-                           min-width: 80px; padding: 0 16px; }}
-QMessageBox QPushButton:hover, QMessageBox QPushButton:focus {{ border-color: {ACCENT}; }}
-QPushButton#update:focus {{ border: 2px solid #fff; }}
+QPushButton#start:focus {{ border: 2px solid {FOCUS}; }}
+QPushButton#start:disabled {{ background: rgba(88, 101, 242, 120); color: rgba(255, 255, 255, 120); }}
+QLabel#status {{ background: {SURFACE}; border-radius: 8px; min-height: 32px; padding: 0 14px; font-size: 13px; }}
+QPushButton#update {{ background: {GREEN}; border: none; border-radius: 8px; min-height: 32px; padding: 0 14px;
+                      font-size: 13px; font-weight: 600; color: #fff; }}
+QPushButton#update:hover {{ background: {GREEN_HOVER}; }}
+QPushButton#update:focus {{ border: 2px solid {FOCUS}; }}
+QMessageBox {{ background: {BG}; }}
+QMessageBox QPushButton {{ background: {GREY_BUTTON}; border: none; border-radius: 8px; min-height: 32px;
+                           min-width: 90px; padding: 0 16px; color: #fff; font-weight: 600; }}
+QMessageBox QPushButton:hover {{ background: #3a3a40; }}
+QMessageBox QPushButton#primary {{ background: {ACCENT}; }}
+QMessageBox QPushButton#primary:hover {{ background: {ACCENT_HOVER}; }}
+QMessageBox QPushButton:focus {{ border: 2px solid {FOCUS}; }}
 QFrame#bar {{ background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 rgba(0, 0, 0, 0),
-                                          stop: 1 rgba(0, 0, 0, 200)); border: none; }}
-QFrame#bar QToolButton {{ background: transparent; border: none; border-radius: 6px; min-width: 36px;
-                          min-height: 36px; }}
-QFrame#bar QToolButton:hover, QFrame#bar QToolButton:checked {{ background: rgba(255, 255, 255, 26); }}
-QFrame#bar QToolButton#round {{ background: {DC_BUTTON}; border-radius: 24px; min-width: 48px; min-height: 48px; }}
-QFrame#bar QToolButton#round:hover {{ background: {DC_BUTTON_HOVER}; }}
-QFrame#bar QToolButton#stop {{ background: {DC_RED}; border-radius: 24px; min-width: 48px; min-height: 48px; }}
+                                          stop: 1 rgba(0, 0, 0, 200)); border: none; }}  /* soft fade over video */
+QFrame#bar QToolButton {{ background: transparent; border: none; border-radius: 8px; }}
+QFrame#bar QToolButton:hover {{ background: rgba(255, 255, 255, 26); }}
+QFrame#group {{ background: {DC_GROUP}; border: 1px solid {DC_GROUP_BORDER}; border-radius: 12px; }}
+QFrame#bar QToolButton#stop {{ background: {DC_RED}; border-radius: 12px; }}
 QFrame#bar QToolButton#stop:hover {{ background: {DC_RED_HOVER}; }}
-QFrame#bar QToolButton:focus {{ border: 2px solid #fff; }}
-QFrame#bar QLabel {{ color: {DC_TEXT}; font-size: 13px; }}
-QFrame#bar QLabel#title {{ color: #fff; font-size: 15px; font-weight: 600; }}
-QFrame#bar QLabel#live {{ background: {DC_RED}; color: #fff; border-radius: 4px; padding: 1px 6px;
-                          font-size: 11px; font-weight: bold; }}
-QFrame#bar QSlider::sub-page:horizontal {{ background: {ACCENT}; }}
-QFrame#bar QSlider::handle:horizontal {{ border: none; width: 12px; height: 12px; margin: -4px 0; border-radius: 6px; }}
-QLabel#info {{ background: rgba(0, 0, 0, 150); border-radius: 4px; padding: 4px 8px; color: {DC_TEXT};
-               font-family: "Cascadia Mono", "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 12px; }}
+QFrame#bar QToolButton:focus {{ border: 2px solid {FOCUS}; }}
+QFrame#chip {{ background: {DC_GROUP}; border-radius: 8px; }}
+QFrame#chip QLabel {{ color: {DC_TEXT}; font-size: 14px; }}
+QFrame#pill {{ background: transparent; }}
+QFrame#pill QLabel {{ color: #fff; font-size: 13px; font-weight: bold; padding: 2px 8px; }}
+QFrame#pill QLabel#quality {{ background: {DC_PILL}; border-top-left-radius: 10px; border-bottom-left-radius: 10px; }}
+QFrame#pill QLabel#live {{ background: {DC_RED}; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }}
+/* Discord's stream volume: a 6px bar in a 2px black frame, round on top, standing flush on the control strip */
+QFrame#volpop {{ background: #000; border-radius: 5px; }}
 QToolTip {{ background: {DC_TOOLTIP}; color: {DC_TEXT}; border: none; padding: 6px 10px; font-size: 13px;
             font-weight: 600; }}
 """
@@ -177,7 +173,8 @@ def svg_icon(svg):
 
 def icon(name, color=TEXT, weight=2):
     return svg_icon(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
-                    f'stroke="{color}" stroke-width="{weight}" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+                    f'stroke="{color}" stroke-width="{weight}" stroke-linecap="round" stroke-linejoin="round">'
+                    f'{ICONS[name].replace("FILL", color)}</svg>')
 
 
 def flag(lang):
@@ -238,7 +235,7 @@ def dark_titlebar(widget):
     if sys.platform != "win32":
         return
     import ctypes
-    bg = QColor(BG)
+    bg = QColor(TITLEBAR)
     for attr, value in ((20, 1), (35, bg.red() | bg.green() << 8 | bg.blue() << 16)):  # dark mode, caption colour
         ctypes.windll.dwmapi.DwmSetWindowAttribute(int(widget.winId()), attr, ctypes.byref(ctypes.c_int(value)), 4)
 
@@ -277,24 +274,64 @@ class Toggle(QAbstractButton):
         self.update()
 
     def sizeHint(self):
-        return QSize(48 + self.fontMetrics().horizontalAdvance(self.text()), 24)
+        font = self.font()
+        font.setWeight(QFont.Weight.DemiBold)  # measured like it's painted
+        return QSize(54 + QFontMetrics(font).horizontalAdvance(self.text()), 24)
+
+    def paintEvent(self, _):
+        """Discord switch: dark track with a 1px border when off, blurple when on, plain white knob."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setOpacity(1 if self.isEnabled() else 0.4)
+        off, on = QColor(FIELD).getRgbF(), QColor(ACCENT).getRgbF()
+        p.setBrush(QColor.fromRgbF(*(a + (b - a) * self.pos_ for a, b in zip(off, on))))
+        border = QColor(BORDER)
+        border.setAlphaF(1 - self.pos_)  # the border fades out as the track fills
+        p.setPen(QPen(border, 1))
+        track = QRectF(0.5, 2.5, 38, 19)
+        p.drawRoundedRect(track, 9.5, 9.5)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#fff"))
+        p.drawEllipse(QPointF(10 + 19 * self.pos_, 12), 7, 7)
+        if self.hasFocus():  # keyboard focus ring (WCAG 2.4.7)
+            p.setPen(QPen(QColor(FOCUS), 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRoundedRect(track, 9.5, 9.5)
+        p.setPen(QColor(HEADER))
+        font = p.font()
+        font.setWeight(QFont.Weight.DemiBold)  # Discord's switch rows are labelled in semibold white
+        p.setFont(font)
+        p.drawText(QRect(50, 0, self.width() - 50, self.height()), Qt.AlignmentFlag.AlignVCenter, self.text())
+
+
+class VolumeBar(QSlider):
+    """Discord's stream volume: a slim pill track with a blurple pill rising from the bottom, both ends round
+    (QSS can't round the fill's top where it meets the handle). Click or drag anywhere sets the level."""
+
+    def __init__(self):
+        super().__init__(Qt.Orientation.Vertical, minimum=0, maximum=100)
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setOpacity(1 if self.isEnabled() else 0.4)
         p.setPen(Qt.PenStyle.NoPen)
-        off, on = QColor(TRACK).getRgbF(), QColor(ACCENT).getRgbF()
-        p.setBrush(QColor.fromRgbF(*(a + (b - a) * self.pos_ for a, b in zip(off, on))))
-        p.drawRoundedRect(0, 2, 38, 20, 10, 10)
-        p.setBrush(QColor("#fff"))
-        p.drawEllipse(QPointF(10 + 18 * self.pos_, 12), 8, 8)
-        if self.hasFocus():  # keyboard focus ring (WCAG 2.4.7)
-            p.setPen(QPen(QColor("#fff"), 2))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(QRectF(1, 3, 36, 18), 9, 9)
-        p.setPen(QColor(TEXT))
-        p.drawText(QRect(48, 0, self.width() - 48, self.height()), Qt.AlignmentFlag.AlignVCenter, self.text())
+        r = QRectF(self.rect())
+        radius = r.width() / 2
+        p.setBrush(QColor("#3e3f40"))
+        p.drawRoundedRect(r, radius, radius)
+        level = r.height() * (self.value() - self.minimum()) / (self.maximum() - self.minimum())
+        if level > 0:
+            p.setBrush(QColor(FOCUS if self.hasFocus() else ACCENT))  # keyboard focus shows in the fill
+            p.drawRoundedRect(QRectF(r.left(), r.bottom() - level, r.width(), level), radius, min(radius, level / 2))
+
+    def mousePressEvent(self, ev):
+        self.set_from(ev.position().y())
+
+    def mouseMoveEvent(self, ev):  # only while pressed (no mouse tracking)
+        self.set_from(ev.position().y())
+
+    def set_from(self, y):
+        self.setValue(round(self.maximum() * (1 - y / self.height())))  # setValue clamps to 0..100
 
 
 class Combo(QComboBox):
@@ -338,6 +375,7 @@ class Live(QWidget):
     def __init__(self, main):
         super().__init__()
         self.main, self.frame, self.image, self.frame_size = main, None, QImage(), QSize()
+        self.mouse_at = QPointF(-1, -1)
         self.setWindowTitle(f"{APP} – Live")
         self.resize(1280, 720)
         self.setMinimumSize(800, 360)
@@ -347,50 +385,79 @@ class Live(QWidget):
         self.gpu = self.gpu_surface()  # created first, so the overlays below stack on top of it
         self.bar = QFrame(self, objectName="bar")
         self.grid = QGridLayout(self.bar)
-        self.grid.setContentsMargins(20, 56, 20, 18)  # tall top margin: room for the gradient to fade in
+        self.grid.setContentsMargins(16, 56, 16, 14)  # tall top margin: room for the gradient to fade in
         self.sides = left, mid, right = QHBoxLayout(), QHBoxLayout(), QHBoxLayout()
         for col, lay in enumerate(self.sides):
-            lay.setSpacing(10 if col == 1 else 6)
+            lay.setSpacing(12 if col == 1 else 8)
             self.grid.addLayout(lay, 0, col, (Qt.AlignmentFlag.AlignLeft, Qt.AlignmentFlag.AlignCenter,
                                               Qt.AlignmentFlag.AlignRight)[col] | Qt.AlignmentFlag.AlignVCenter)
         self.grid.setColumnStretch(0, 1)
         self.grid.setColumnStretch(2, 1)
 
-        left.addWidget(QLabel("LIVE", objectName="live"))
-        self.title = QLabel(objectName="title")
-        left.addWidget(self.title)
+        chip = QFrame(objectName="chip")  # Discord's name tag: monitor icon + source name
+        c = QHBoxLayout(chip)
+        c.setContentsMargins(8, 4, 10, 4)
+        c.setSpacing(6)
+        screen = QLabel()
+        screen.setPixmap(icon("screen", DC_TEXT).pixmap(16, 16))
+        self.title = QLabel()
+        c.addWidget(screen)
+        c.addWidget(self.title)
+        left.addWidget(chip)
 
-        self.gear = QToolButton(icon=icon("settings", DC_TEXT), iconSize=QSize(22, 22), objectName="round")
+        group = QFrame(objectName="group")  # Discord groups the call actions in one framed pill
+        g = QHBoxLayout(group)
+        g.setContentsMargins(4, 4, 4, 4)  # same inset on all sides: the hover highlight sits evenly in the frame
+        g.setSpacing(4)
+        self.gear = QToolButton(icon=icon("settings", "#fff"), iconSize=QSize(22, 22))
+        self.gear.setFixedSize(48, 40)
         self.gear.clicked.connect(main.toggle_settings)
-        self.mute = QToolButton(iconSize=QSize(22, 22), objectName="round")
-        self.mute.clicked.connect(main.listen.toggle)
+        g.addWidget(self.gear)
         self.stop_btn = QToolButton(icon=icon("stop", "#fff"), iconSize=QSize(22, 22), objectName="stop")
+        self.stop_btn.setFixedSize(60, 50)  # as tall as the framed group next to it
         self.stop_btn.clicked.connect(main.stop)
-        for w in (self.gear, self.mute, self.stop_btn):
-            mid.addWidget(w)
+        mid.addWidget(group)
+        mid.addWidget(self.stop_btn)
 
-        self.vol = QSlider(Qt.Orientation.Horizontal, minimum=0, maximum=100)
-        self.vol.setFixedWidth(120)
+        # Discord: a speaker icon next to fullscreen; hovering it opens a vertical volume slider above, click mutes
+        self.mute = QToolButton(iconSize=QSize(22, 22))
+        self.mute.setFixedSize(40, 40)  # square: even padding around the icon on hover
+        self.mute.clicked.connect(main.listen.toggle)
+        self.volpop = QFrame(self, objectName="volpop")
+        pop = QVBoxLayout(self.volpop)
+        pop.setContentsMargins(2, 2, 2, 2)  # Discord's slim 2px frame
+        self.vol = VolumeBar()
+        self.vol.setFixedSize(6, 76)
         self.vol.valueChanged.connect(main.vol.setValue)
-        self.pct = QLabel()
-        self.pct.setFixedWidth(40)
-        self.info = QLabel(self, objectName="info")
-        self.info_btn = QToolButton(icon=icon("info", DC_TEXT), iconSize=QSize(22, 22), checkable=True)
-        self.info_btn.toggled.connect(self.info.setVisible)
-        self.info_btn.toggled.connect(lambda on: main.st.setValue("info", on))
-        self.info_btn.setChecked(main.st.value("info", False, type=bool))
-        self.info.setVisible(self.info_btn.isChecked())
-        self.full = QToolButton(icon=icon("fullscreen", DC_TEXT, 2.5), iconSize=QSize(22, 22))
+        pop.addWidget(self.vol, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.volpop.hide()
+        self.pop_hider = QTimer(self, singleShot=True, interval=600)
+        self.pop_hider.timeout.connect(self.volpop.hide)
+        self.info = QFrame(self, objectName="pill")  # Discord's "720p 30 FPS | LIVE" badge, top right, on hover
+        p = QHBoxLayout(self.info)
+        p.setContentsMargins(0, 0, 0, 0)
+        p.setSpacing(0)
+        self.quality = QLabel(objectName="quality")
+        p.addWidget(self.quality)
+        p.addWidget(QLabel("LIVE", objectName="live"))
+        self.info.hide()
+        self.full = QToolButton(icon=icon("fullscreen", DC_ICON, 2.2), iconSize=QSize(22, 22))
+        self.full.setFixedSize(40, 40)
         self.full.clicked.connect(self.toggle_fullscreen)
-        for w in (self.vol, self.pct, self.info_btn, self.full):
+        for w in (self.mute, self.full):
             right.addWidget(w)
-        for w in (self.gear, self.mute, self.stop_btn, self.vol, self.info_btn, self.full):
+        for w in (self.gear, self.stop_btn, self.mute, self.vol, self.full):
             w.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # reachable by keyboard, no focus ring after a click
+            w.installEventFilter(self)
         self.bar.hide()
         self.bar.installEventFilter(self)
+        self.volpop.installEventFilter(self)
         self.fade = QGraphicsOpacityEffect(self.bar, opacity=0)
         self.bar.setGraphicsEffect(self.fade)
+        self.info_fade = QGraphicsOpacityEffect(self.info, opacity=0)  # the badge fades together with the bar
+        self.info.setGraphicsEffect(self.info_fade)
         self.fader = QPropertyAnimation(self.fade, b"opacity", self)
+        self.fader.valueChanged.connect(lambda v: v is not None and self.info_fade.setOpacity(v))  # None on restart
         self.fader.finished.connect(self.faded)
         self.hider = QTimer(self, singleShot=True, interval=1500)
         self.hider.timeout.connect(lambda: self.fade_to(0, 250))
@@ -452,12 +519,16 @@ class Live(QWidget):
         self.bar.setGeometry(0, self.height() - height, self.width(), height)
         self.unsetCursor()
         self.bar.show()
+        if self.info.isHidden():
+            self.info.show()
+            self.info.raise_()
         if self.fader.endValue() != 1:  # hidden or fading out
             self.fade_to(1, 150)
         self.hider.start()
 
     def fade_to(self, opacity, ms):
         self.fade.setEnabled(True)
+        self.info_fade.setEnabled(True)
         self.fader.stop()
         self.fader.setDuration(ms)
         self.fader.setEndValue(opacity)
@@ -467,34 +538,55 @@ class Live(QWidget):
         """Effect off once fully visible: it re-renders the bar offscreen on every video frame otherwise."""
         if self.fade.opacity() == 0:
             self.bar.hide()
+            self.info.hide()
+            self.volpop.hide()
             if self.isFullScreen():  # like Discord: an idle mouse disappears in fullscreen
                 self.setCursor(Qt.CursorShape.BlankCursor)
-        self.fade.setEnabled(self.fade.opacity() < 1)
+        for effect in (self.fade, self.info_fade):
+            effect.setEnabled(self.fade.opacity() < 1)
 
-    def mouseMoveEvent(self, _):
-        self.reveal()
+    def mouseMoveEvent(self, ev):
+        """Only real movement: Qt also sends synthetic moves when overlays show / restack, which would loop."""
+        if ev.position() != self.mouse_at:
+            self.mouse_at = ev.position()
+            self.reveal()
 
     def enterEvent(self, _):
         self.reveal()
 
     def set_info(self, text):
-        """Resolution / fps overlay, top right."""
-        self.info.setText(text)
+        """Quality + LIVE badge, top right, like Discord's "720p 30 FPS | LIVE"."""
+        self.quality.setText(text)
         self.info.adjustSize()
         self.info.move(self.width() - self.info.width() - 16, 16)
 
     def resizeEvent(self, _):
         if self.gpu:
             self.view.setGeometry(self.rect())
-        self.set_info(self.info.text())
+        self.set_info(self.quality.text())
         if self.bar.isVisible():
             self.reveal()
 
-    def eventFilter(self, obj, ev):  # keep the bar up while the cursor is on it
-        if ev.type() == QEvent.Type.Enter:
-            self.hider.stop()
-        elif ev.type() == QEvent.Type.Leave:
-            self.hider.start()
+    def show_volume(self):
+        """Vertical volume slider above the speaker, standing on the black strip like Discord's."""
+        self.pop_hider.stop()
+        self.volpop.adjustSize()
+        top = self.mute.mapTo(self, QPoint(self.mute.width() // 2, 0))
+        self.volpop.move(top.x() - self.volpop.width() // 2, top.y() - self.volpop.height() - 6)
+        self.volpop.show()
+        self.volpop.raise_()
+
+    def eventFilter(self, obj, ev):
+        kind = ev.type()
+        if kind == QEvent.Type.FocusIn and ev.reason() not in (Qt.FocusReason.TabFocusReason,
+                                                               Qt.FocusReason.BacktabFocusReason):
+            self.setFocus()  # the focus ring is for keyboard navigation only, never left behind by the mouse
+        elif kind in (QEvent.Type.Enter, QEvent.Type.Leave):
+            entering = kind == QEvent.Type.Enter
+            if obj in (self.bar, self.volpop):  # keep the bar up while the cursor is on it
+                self.hider.stop() if entering else self.hider.start()
+            if obj in (self.mute, self.volpop):  # speaker <-> slider popup, with a short grace period between
+                self.show_volume() if entering else self.pop_hider.start()
         return False
 
     def toggle_fullscreen(self):
@@ -503,16 +595,16 @@ class Live(QWidget):
 
     def changeEvent(self, ev):
         if ev.type() == QEvent.Type.WindowStateChange:
-            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen", DC_TEXT, 2.5))
+            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen", DC_ICON, 2.2))
             self.retranslate()
 
     def retranslate(self):
         """Tooltips + screen-reader names of the icon-only controls; language and state (muted, fullscreen) dependent."""
         t = self.main.t
-        for w, key in ((self.gear, "tip_settings"), (self.stop_btn, "tip_stop"), (self.info_btn, "tip_info"),
+        for w, key in ((self.gear, "tip_settings"), (self.stop_btn, "tip_stop"),
                        (self.mute, "tip_mute" if self.main.listen.isChecked() else "tip_unmute"),
                        (self.full, "tip_window" if self.isFullScreen() else "tip_full"), (self.vol, "tip_volume")):
-            w.setToolTip(t(key))
+            w.setToolTip("" if w is self.mute else t(key))  # the speaker opens the volume popup instead
             w.setAccessibleName(t(key))
 
     def mouseDoubleClickEvent(self, _):
@@ -531,7 +623,9 @@ class Live(QWidget):
             self.reveal()
         elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.main.vol.setValue(self.main.vol.value() + (5 if key == Qt.Key.Key_Up else -5))
-            self.reveal()  # show the slider moving
+            self.reveal()
+            self.show_volume()  # show the slider moving
+            self.pop_hider.start()
         else:
             super().keyPressEvent(ev)
 
@@ -589,7 +683,7 @@ class Main(QWidget):
         cols = QHBoxLayout()
         cols.setSpacing(16)
         root.addLayout(cols)
-        card = self.card(cols, "video", "camera")
+        card = self.card(cols, "video")
         self.video = self.field(card, "device")
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -597,7 +691,7 @@ class Main(QWidget):
         self.res, self.fps = self.field(row, "res"), self.field(row, "fps")
         card.addStretch()
 
-        card = self.card(cols, "audio", "wave")
+        card = self.card(cols, "audio")
         self.ain = self.field(card, "input")
         self.listen = self.tr_(Toggle(self.st.value("listen", True, type=bool)), "listen")
         card.addWidget(self.listen)
@@ -606,7 +700,7 @@ class Main(QWidget):
         self.vol_lbl, self.vol = self.slider(card, 0, 100, int(self.st.value("volume", 100)))
         card.addStretch()
 
-        card = self.card(cols, "advanced", "settings")
+        card = self.card(cols, "advanced")
         self.buf_lbl, self.buf = self.slider(card, 0, 2000, int(self.st.value("buf", 0)), step=50)
         self.auto_exp = self.tr_(Toggle(self.st.value("auto_exp", True, type=bool)), "auto_exp")
         card.addWidget(self.auto_exp)
@@ -617,8 +711,6 @@ class Main(QWidget):
 
         self.btn = self.tr_(QPushButton(objectName="start", cursor=Qt.CursorShape.PointingHandCursor), "start")
         self.btn.clicked.connect(self.start)
-        self.btn.setGraphicsEffect(QGraphicsDropShadowEffect(self.btn, blurRadius=32, xOffset=0, yOffset=6,
-                                                             color=QColor(61, 123, 255, 110)))  # blue glow
         root.addWidget(self.btn)
         foot = QHBoxLayout()
         foot.setSpacing(10)
@@ -659,6 +751,10 @@ class Main(QWidget):
         self.ticker.start()
         if geo := self.st.value("geo_main"):  # position of the last session (Qt keeps it on a connected screen)
             self.restoreGeometry(geo)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # the window holds focus at start, not the first dropdown
+        for kind in (QComboBox, QSlider, QPushButton):
+            for w in self.findChildren(kind):
+                w.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # focus ring only via keyboard; clicks work without focus
         dark_titlebar(self)
         self.net = QNetworkAccessManager(self)
         if VERSION != "dev":
@@ -672,32 +768,22 @@ class Main(QWidget):
     def t(self, key, *args):
         return TR[self.lang][key].format(*args)
 
-    def card(self, cols, title, icon_name):
+    def card(self, cols, title):
         frame = QFrame(objectName="card")
         frame.setMinimumWidth(350)
         cols.addWidget(frame, 1)
         lay = QVBoxLayout(frame)
-        lay.setContentsMargins(16, 14, 16, 16)
+        lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(6)
-        head = QHBoxLayout()
-        head.setSpacing(8)
-        pic = QLabel()
-        pic.setPixmap(icon(icon_name, ACCENT).pixmap(16, 16))
-        lbl = self.tr_(label(role="title"), title)
-        font = lbl.font()
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)  # spaced caps (QSS has no letter-spacing)
-        lbl.setFont(font)
-        head.addWidget(pic)
-        head.addWidget(lbl)
-        head.addStretch()
-        lay.addLayout(head)
-        lay.addSpacing(6)
+        lay.addWidget(self.tr_(label(role="title"), title))
+        lay.addSpacing(8)
         return lay
 
     def field(self, lay, key):
         box = QVBoxLayout()
-        box.setSpacing(4)
-        box.addWidget(self.tr_(label(), key))
+        box.setSpacing(6)
+        lbl = self.tr_(label(role="label"), key)
+        box.addWidget(lbl)
         combo = Combo()
         box.addWidget(combo)
         box.addSpacing(6)
@@ -705,7 +791,7 @@ class Main(QWidget):
         return combo
 
     def slider(self, lay, lo, hi, value, step=1):
-        lbl = label()
+        lbl = label(role="label")  # Discord: white heading above the slider ("Lautsprecherlautstärke")
         sl = QSlider(Qt.Orientation.Horizontal, minimum=lo, maximum=hi, singleStep=step, pageStep=step, value=value)
         lay.addWidget(lbl)
         lay.addWidget(sl)
@@ -761,9 +847,7 @@ class Main(QWidget):
 
     def update_save(self):
         """While live, "Save" restarts the stream (black for a moment): only offer it when something changed."""
-        on = not self.camera or self.state() != self.saved
-        self.btn.setEnabled(on)
-        self.btn.graphicsEffect().setEnabled(on)  # no blue glow under a disabled button
+        self.btn.setEnabled(not self.camera or self.state() != self.saved)
 
     def match_exposure(self):
         """Exposure controls only for webcams: a capture card passes its source's picture through as is.
@@ -922,7 +1006,7 @@ class Main(QWidget):
         elif self.shown:
             size, fps = self.live.frame_size, self.shown / (now - self.t0)
             self.set_status("running", f"{size.width()}x{size.height()}", fps, kind="ok")
-            self.live.set_info(f"{size.width()}x{size.height()}  ·  {fps:.0f} fps")
+            self.live.set_info(f"{size.height()}p {fps:.0f} FPS")  # Discord's notation
         self.shown, self.t0 = 0, now
 
     def apply_audio(self):
@@ -930,8 +1014,7 @@ class Main(QWidget):
         vol, on = self.vol.value(), self.listen.isChecked()
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
-        self.live.pct.setText(f"{vol} %")
-        self.live.mute.setIcon(icon("volume", DC_TEXT) if on else icon("muted", DC_RED))
+        self.live.mute.setIcon(icon("volume", DC_ICON) if on else icon("muted", DC_RED))
         self.live.retranslate()
         self.aout.setEnabled(on)
         if self.speaker:
@@ -973,10 +1056,15 @@ class Main(QWidget):
     def ask(self, text):
         """Modal yes / no over the window, buttons in the app's language (Qt's own would be English)."""
         box = QMessageBox(QMessageBox.Icon.Question, APP, text, parent=self)
-        yes = box.addButton(self.t("yes"), QMessageBox.ButtonRole.YesRole)
+        yes = QPushButton(self.t("yes"), box, objectName="primary")  # blurple like Discord's; named before styling
+        box.addButton(yes, QMessageBox.ButtonRole.YesRole)
         box.setDefaultButton(box.addButton(self.t("no"), QMessageBox.ButtonRole.NoRole))
         box.exec()
         return box.clickedButton() is yes
+
+    def showEvent(self, _):
+        if self.focusWidget() is None:
+            self.setFocus()  # else Qt focuses (and rings) the first control on activation
 
     def show_settings(self):
         self.showNormal()
