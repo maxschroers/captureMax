@@ -1,6 +1,9 @@
 """captureMax: low-latency live viewer for capture cards and webcams on Windows, macOS and Linux (Qt Multimedia)."""
 import functools
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
 from collections import deque
@@ -21,6 +24,13 @@ APP = "captureMax"
 VERSION = "dev"  # release builds: CI writes the git tag here (.github/workflows/release.yml)
 REPO = "maxschroers/captureMax"
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
+WIN_FROZEN = sys.platform == "win32" and getattr(sys, "frozen", False)
+WIN_ASSET = f"{APP}-windows.exe"  # release asset name, fetched by the self-update (.github/workflows/release.yml)
+INSTALL_DIR = Path(os.environ.get("LOCALAPPDATA", "~")).expanduser() / "Programs" / APP
+INSTALLED_EXE, NEW_EXE, OLD_EXE = (INSTALL_DIR / f"{APP}.exe{s}" for s in ("", ".new", ".old"))
+START_MENU_LNK = (Path(os.environ.get("APPDATA", "~")).expanduser() / "Microsoft/Windows/Start Menu/Programs"
+                  / f"{APP}.lnk")
+UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP}"
 # Discord dark theme (2025 refresh), sampled from the desktop client
 ACCENT, ACCENT_HOVER, ACCENT_DEEP = "#5865f2", "#4752c4", "#3c45a5"  # blurple
 # settings, measured from Discord's "Sprach- & Videochat" page: #202024 content, #1a1a1e panels, #1c1c20 inputs with a
@@ -59,6 +69,14 @@ TR = {
         "error": "Fehler: {}",
         "update": "Update auf v{} verfügbar",
         "update_ask": "Version {} ist verfügbar (installiert: {}).\nJetzt herunterladen?", "yes": "Ja", "no": "Nein",
+        "update_self": "Version {} ist verfügbar (installiert: {}).\nJetzt aktualisieren? captureMax startet danach neu.",
+        "downloading": "Lade Update... {} %",
+        "update_fail": "Update fehlgeschlagen: {}\nDie Download-Seite wird geöffnet.",
+        "install": "Installieren",
+        "install_ask": "captureMax für dich installieren?\nKommt ins Startmenü, aktualisiert sich selbst und lässt sich "
+                       "unter Einstellungen → Apps wieder entfernen.",
+        "install_fail": "Installation fehlgeschlagen: {}",
+        "uninstall_ask": "captureMax deinstallieren?",
         "discard": "Einstellungen wurden geändert. Ohne Speichern schließen?",
         "tip_stop": "Stream beenden", "tip_mute": "Ton aus (M)", "tip_unmute": "Ton an (M)",
         "tip_settings": "Einstellungen", "tip_full": "Vollbild (F)",
@@ -77,6 +95,13 @@ TR = {
         "error": "Error: {}",
         "update": "Update to v{} available",
         "update_ask": "Version {} is available (installed: {}).\nDownload it now?", "yes": "Yes", "no": "No",
+        "update_self": "Version {} is available (installed: {}).\nUpdate now? captureMax restarts afterwards.",
+        "downloading": "Downloading update... {} %", "update_fail": "Update failed: {}\nOpening the download page.",
+        "install": "Install",
+        "install_ask": "Install captureMax for you?\nIt goes into the Start menu, keeps itself up to date and can be "
+                       "removed under Settings → Apps.",
+        "install_fail": "Installation failed: {}",
+        "uninstall_ask": "Uninstall captureMax?",
         "discard": "Settings were changed. Close without saving?",
         "tip_stop": "Stop stream", "tip_mute": "Mute (M)", "tip_unmute": "Unmute (M)", "tip_settings": "Settings",
         "tip_full": "Fullscreen (F)", "tip_window": "Exit fullscreen (Esc)",
@@ -240,6 +265,75 @@ def dark_titlebar(widget):
     bg = QColor(TITLEBAR)
     for attr, value in ((20, 1), (35, bg.red() | bg.green() << 8 | bg.blue() << 16)):  # dark mode, caption colour
         ctypes.windll.dwmapi.DwmSetWindowAttribute(int(widget.winId()), attr, ctypes.byref(ctypes.c_int(value)), 4)
+
+
+def default_lang():
+    return "de" if QLocale.system().language() == QLocale.Language.German else "en"
+
+
+def ask(text, lang, parent=None):
+    """Modal yes / no, buttons in the app's language (Qt's own would be English)."""
+    box = QMessageBox(QMessageBox.Icon.Question, APP, text, parent=parent)
+    yes = QPushButton(TR[lang]["yes"], box, objectName="primary")  # blurple like Discord's; named before styling
+    box.addButton(yes, QMessageBox.ButtonRole.YesRole)
+    box.setDefaultButton(box.addButton(TR[lang]["no"], QMessageBox.ButtonRole.NoRole))
+    box.exec()
+    return box.clickedButton() is yes
+
+
+# ---- Windows: the portable onefile exe installs itself per user (no admin) and, once installed, updates itself
+def installed():
+    return WIN_FROZEN and Path(sys.executable).resolve() == INSTALLED_EXE.resolve()
+
+
+def asset_url(release):
+    """Download url + size of the Windows exe in a GitHub releases/latest reply, None if it has none."""
+    for a in release.get("assets", []):
+        if a.get("name") == WIN_ASSET:
+            return a["browser_download_url"], a["size"]
+    return None
+
+
+def register():
+    """Entry in Settings → Apps; its uninstall button runs `captureMax.exe --uninstall`."""
+    import winreg
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY) as key:
+        for name, value in (("DisplayName", APP), ("DisplayVersion", VERSION), ("Publisher", "Max Schroers"),
+                            ("DisplayIcon", str(INSTALLED_EXE)), ("InstallLocation", str(INSTALL_DIR)),
+                            ("URLInfoAbout", f"https://github.com/{REPO}"),
+                            ("UninstallString", f'"{INSTALLED_EXE}" --uninstall')):
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+        for name in ("NoModify", "NoRepair"):
+            winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, 1)
+
+
+def install():
+    INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sys.executable, INSTALLED_EXE)
+    lnk, exe = (str(p).replace("'", "''") for p in (START_MENU_LNK, INSTALLED_EXE))  # PowerShell '' = literal '
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    f"$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}'); "
+                    f"$s.TargetPath = '{exe}'; $s.Save()"],
+                   check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    register()
+
+
+def uninstall():
+    """A running exe can't delete itself: a detached cmd removes the folder once this process has exited."""
+    import winreg
+    START_MENU_LNK.unlink(missing_ok=True)
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
+    except OSError:
+        pass
+    subprocess.Popen(f'cmd /c ping -n 5 127.0.0.1 >nul & rmdir /s /q "{INSTALL_DIR}"',
+                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS)
+
+
+def relaunch(exe):
+    """Without the reset the child onefile would reuse this process's unpack dir, which vanishes when we exit."""
+    subprocess.Popen([str(exe)], env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"},
+                     creationflags=subprocess.DETACHED_PROCESS)
 
 
 class JumpStyle(QProxyStyle):
@@ -646,8 +740,7 @@ class Main(QWidget):
         super().__init__(objectName="main")
         self.setWindowTitle(APP)
         self.st = QSettings(APP, APP)
-        default_lang = "de" if QLocale.system().language() == QLocale.Language.German else "en"
-        self.lang = self.st.value("lang", default_lang)
+        self.lang = self.st.value("lang", default_lang())
         self.texts = []  # (widget, key) pairs re-labelled on language switch
         self.session = self.camera = self.mic = self.speaker = None
         self.muted = False  # hover bar / M key, live only; "Enable output" in settings applies on Save
@@ -723,9 +816,18 @@ class Main(QWidget):
         self.upd.clicked.connect(self.open_download)
         self.upd.hide()
         foot.addWidget(self.upd)
+        self.inst = self.tr_(QPushButton(objectName="update", cursor=Qt.CursorShape.PointingHandCursor), "install")
+        self.inst.clicked.connect(self.install)
+        self.inst.setVisible(WIN_FROZEN and not installed())
+        foot.addWidget(self.inst)
         foot.addWidget(label(VERSION if VERSION == "dev" else f"v{VERSION}"))
         root.addLayout(foot)
-        self.latest = None
+        self.latest = self.download = None
+        if installed():
+            try:
+                OLD_EXE.unlink(missing_ok=True)  # left behind by the last self-update
+            except OSError:
+                pass  # the old process is still exiting: next start
 
         self.live = Live(self)
         self.video.currentIndexChanged.connect(self.fill_res)
@@ -1048,31 +1150,81 @@ class Main(QWidget):
         if reply.error() != QNetworkReply.NetworkError.NoError:
             return
         try:
-            latest = json.loads(bytes(reply.readAll()))["tag_name"].lstrip("v")
+            release = json.loads(bytes(reply.readAll()))
+            latest = release["tag_name"].lstrip("v")
             newer = version_key(latest) > version_key(VERSION)
         except (ValueError, KeyError):
             return
         if newer:
+            self.download = asset_url(release) if installed() else None  # portable / macOS / Linux: release page
             self.show_update(latest)
 
     def show_update(self, latest):
         self.latest = latest
         self.upd.setText(self.t("update", latest))
         self.upd.show()  # stays as a reminder after "No"
-        if self.ask(self.t("update_ask", f"v{latest}", f"v{VERSION}")):
+        if self.ask(self.t("update_self" if self.download else "update_ask", f"v{latest}", f"v{VERSION}")):
             self.open_download()
 
     def open_download(self):
-        QDesktopServices.openUrl(QUrl(f"https://github.com/{REPO}/releases/latest"))
+        if self.download:
+            self.self_update()
+        else:
+            QDesktopServices.openUrl(QUrl(f"https://github.com/{REPO}/releases/latest"))
+
+    def self_update(self):
+        url, size = self.download
+        req = QNetworkRequest(QUrl(url))  # GitHub redirects to its CDN, Qt follows same-or-safer redirects by default
+        req.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, f"{APP}/{VERSION}")
+        reply = self.net.get(req)
+        self.upd.setEnabled(False)
+        reply.downloadProgress.connect(lambda got, _: self.upd.setText(self.t("downloading", got * 100 // size)))
+        reply.finished.connect(lambda: self.update_downloaded(reply, size))
+
+    def update_downloaded(self, reply, size):
+        """Windows can rename a running exe, not overwrite it: swap the files, then restart into the new one."""
+        reply.deleteLater()
+        data = bytes(reply.readAll())
+        try:
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                raise OSError(reply.errorString())
+            if len(data) != size or not data.startswith(b"MZ"):
+                raise OSError("incomplete download")
+            NEW_EXE.write_bytes(data)
+            INSTALLED_EXE.replace(OLD_EXE)
+            NEW_EXE.replace(INSTALLED_EXE)
+            register()  # new version in Settings → Apps
+        except OSError as e:
+            if not INSTALLED_EXE.exists() and OLD_EXE.exists():
+                OLD_EXE.replace(INSTALLED_EXE)  # swap half done: put the running version back
+            self.upd.setEnabled(True)
+            self.upd.setText(self.t("update", self.latest))
+            self.tell(self.t("update_fail", e))
+            self.download = None  # the button now opens the release page instead
+            return self.open_download()
+        self.restart_into(INSTALLED_EXE)
+
+    def install(self):
+        if not self.ask(self.t("install_ask")):
+            return
+        try:
+            install()
+        except (OSError, subprocess.CalledProcessError) as e:  # e.g. the installed copy is running right now
+            return self.tell(self.t("install_fail", e))
+        self.restart_into(INSTALLED_EXE)
+
+    def restart_into(self, exe):
+        self.stop()
+        self.save()
+        self.st.sync()  # the new process reads the settings right away
+        relaunch(exe)
+        self.close()
 
     def ask(self, text):
-        """Modal yes / no over the window, buttons in the app's language (Qt's own would be English)."""
-        box = QMessageBox(QMessageBox.Icon.Question, APP, text, parent=self)
-        yes = QPushButton(self.t("yes"), box, objectName="primary")  # blurple like Discord's; named before styling
-        box.addButton(yes, QMessageBox.ButtonRole.YesRole)
-        box.setDefaultButton(box.addButton(self.t("no"), QMessageBox.ButtonRole.NoRole))
-        box.exec()
-        return box.clickedButton() is yes
+        return ask(text, self.lang, self)
+
+    def tell(self, text):
+        QMessageBox(QMessageBox.Icon.Warning, APP, text, parent=self).exec()
 
     def showEvent(self, _):
         if self.focusWidget() is None:
@@ -1128,6 +1280,11 @@ def main():
     app.setPalette(pal)
     app.setStyleSheet(QSS)
     app.setWindowIcon(QIcon(str(ASSETS / "icon.png")))
+    if "--uninstall" in sys.argv:  # from Settings → Apps
+        lang = QSettings(APP, APP).value("lang", default_lang())
+        if installed() and ask(TR[lang]["uninstall_ask"], lang):
+            uninstall()
+        return
     w = Main()
     w.show()
     sys.exit(app.exec())

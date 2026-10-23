@@ -32,8 +32,8 @@
 - **Low latency** by default, with an optional video delay (0–2000 ms) to line up picture and sound.
 - **Webcam tuning**: manual exposure for higher frame rates in low light (Windows and Linux). On Windows the
   exposure controls only appear for webcams; capture cards don't have any.
-- **Update check**: on start the app looks for a newer release and offers to open the download page. The installed
-  version is shown bottom right.
+- **Update check**: on start the app looks for a newer release and offers to open the download page. Installed on
+  Windows, it downloads the update and restarts into it instead. The current version is shown bottom right.
 - **German and English UI**: follows the system language, switchable in the header.
 - Dark title bars, remembers all settings.
 
@@ -43,8 +43,8 @@ Grab the build for your system from the [latest release](../../releases/latest):
 
 | System | File | First start |
 |---|---|---|
-| Windows 10/11 | `captureMax-windows.exe` | Run it. SmartScreen may warn about an unknown publisher: *More info → Run anyway*. |
-| macOS 12+ (Apple Silicon) | `captureMax-macos.zip` | Unzip, move to Applications, then **right-click → Open** once (the app is not notarized). Allow camera and microphone access. |
+| Windows 10/11 | `captureMax-windows.exe` | Run it, it works portable. SmartScreen may warn about an unknown publisher: *More info → Run anyway*. Click **Install** (bottom right) to install it for your user, no admin needed: it goes to `%LOCALAPPDATA%\Programs\captureMax`, gets a Start menu entry, updates itself and can be removed under *Settings → Apps*. |
+| macOS 12+ (Apple Silicon) | `captureMax-macos.dmg` | Open it, drag captureMax onto Applications, then **right-click → Open** once (the app is not notarized). Allow camera and microphone access. |
 | Linux (x86-64, glibc 2.35+) | `captureMax-linux.tar.gz` | `tar -xzf captureMax-linux.tar.gz && ./captureMax`. Needs `libxcb-cursor0` and `libpulse0` (or PipeWire's Pulse layer). |
 
 ## Usage

@@ -19,11 +19,13 @@ jobs:
           - os: windows-latest
             bin: dist/captureMax.exe
             package: cp dist/captureMax.exe captureMax-windows.exe
-            asset: captureMax-windows.exe
+            asset: captureMax-windows.exe  # name is fixed: installed copies download it to update themselves
           - os: macos-latest
             bin: dist/captureMax.app/Contents/MacOS/captureMax
-            package: ditto -c -k --keepParent dist/captureMax.app captureMax-macos.zip
-            asset: captureMax-macos.zip
+            package: >
+              mkdir dmg && cp -R dist/captureMax.app dmg/ && ln -s /Applications dmg/Applications &&
+              hdiutil create -volname captureMax -srcfolder dmg -ov -format UDZO captureMax-macos.dmg
+            asset: captureMax-macos.dmg
           - os: ubuntu-22.04  # older glibc = binary runs on more distros
             bin: dist/captureMax
             package: tar -czf captureMax-linux.tar.gz -C dist captureMax

@@ -28,6 +28,17 @@ class Logic(unittest.TestCase):
         self.assertGreater(c.version_key("0.10.0"), c.version_key("0.9.9"))
         self.assertEqual(c.version_key("1.2.3"), (1, 2, 3))
 
+    def test_asset_url_picks_windows_exe(self):
+        release = {"assets": [{"name": "captureMax-macos.dmg", "browser_download_url": "m", "size": 1},
+                              {"name": "captureMax-windows.exe", "browser_download_url": "w", "size": 2}]}
+        self.assertEqual(c.asset_url(release), ("w", 2))
+        self.assertIsNone(c.asset_url({"assets": release["assets"][:1]}))
+        self.assertIsNone(c.asset_url({}))
+
+    def test_source_run_is_not_installed(self):
+        self.assertFalse(c.installed())
+        self.assertFalse(self.m.inst.isVisibleTo(self.m))
+
     def test_combo_fill_keeps_selection(self):
         box = c.Combo()
         box.fill(["a", "b", "c"], "b")
