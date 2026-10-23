@@ -4,7 +4,7 @@
 
 <p align="center">Low-latency live viewer for capture cards and webcams on Windows, macOS and Linux. No OBS, no VLC, one app.</p>
 
-![captureMax settings window](docs/screenshot.png)
+![captureMax settings window with the device picker open](docs/screenshot.png)
 
 ![captureMax live view with Discord-style controls, volume bar and quality badge](docs/live.png)
 
@@ -15,12 +15,14 @@
 - **Audio monitoring**: plays the capture card's audio (48 kHz stereo) on any output. Volume and mute work live.
   The audio input follows the video device automatically.
 - **Discord look**: modelled on Discord's current desktop client. The settings follow its voice & video
-  settings page (dark panels, bordered dropdowns, thin blurple sliders with a round knob, blurple switches and
-  buttons). Moving the mouse over the live window shows Discord's stream controls over a soft gradient: the
-  device's name tag on the left, the framed settings button and the red stop button in the middle, speaker and
-  fullscreen on the right, and the "1080p 60 FPS | LIVE" badge top right. Hovering the speaker raises Discord's
-  slim, rounded volume bar (click or drag to set it), a click on the speaker mutes. Everything fades out when the
-  mouse rests; in fullscreen the cursor hides too.
+  settings page (dark panels, thin blurple sliders with a round knob, blurple switches and buttons). The device
+  dropdowns work like Discord's picker: an icon per device (webcam, capture card, mic, headset), the device type
+  as a grey second line and a blurple check on the current one. Moving the mouse over the live window shows
+  Discord's stream controls over a soft gradient: the device's name tag on the left, the framed settings button
+  and the red stop button in the middle, speaker and fullscreen on the right, and the "1080p 60 FPS | LIVE" badge
+  top right. Hovering a button shows a tooltip bubble above it; the speaker icon shows the current level. Hovering
+  the speaker raises Discord's slim, rounded volume bar (click or drag to set it), a click on the speaker mutes.
+  Everything fades out when the mouse rests; in fullscreen the cursor hides too.
 - **Fullscreen** with the button, `F`, `F11` or a double-click. No window frame, so a Discord window share shows
   only the picture.
 - **GPU rendering**: colour conversion and scaling run on the graphics card (Qt Quick / RHI), which roughly halves
@@ -50,7 +52,8 @@ Grab the build for your system from the [latest release](../../releases/latest):
 ## Usage
 
 1. **VIDEO**: pick the device, resolution and FPS.
-2. **AUDIO**: pick the input (usually the capture card, or *Off*) and your speakers or headset.
+2. **AUDIO**: pick the input (usually the capture card, or *Off*) and your speakers or headset. *Enable output*
+   switches monitoring on or off; while live it applies on *Save*.
 3. Click **Start**. Stop with the red button or by closing the live window.
 
 | Key | Action |
