@@ -2,6 +2,7 @@
 import functools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -11,7 +12,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (QByteArray, QEasingCurve, QEvent, QLocale, QPoint, QPointF, QPropertyAnimation, QRect,
                             QRectF, QSettings, QSize, Qt, QTimer, QUrl, QVariantAnimation)
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
+from PySide6.QtGui import QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtMultimedia import (QAudioFormat, QAudioSink, QAudioSource, QCamera, QMediaCaptureSession,
                                   QMediaDevices, QVideoFrame, QVideoFrameFormat, QVideoSink)
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -35,10 +36,12 @@ UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP}"
 ACCENT, ACCENT_HOVER, ACCENT_DEEP = "#5865f2", "#4752c4", "#3c45a5"  # blurple
 # settings, measured from Discord's "Sprach- & Videochat" page: #202024 content, #1a1a1e panels, #1c1c20 inputs with a
 # 1px #343439 border, 4px blurple slider with a round white knob, blurple switches, #2e2e33 dividers / grey buttons
-BG, SURFACE, FIELD, BORDER, TRACK, TITLEBAR = "#202024", "#1a1a1e", "#1c1c20", "#343439", "#3f3f46", "#121214"
+BG, SURFACE, FIELD, BORDER, TRACK, TITLEBAR = "#1a1a1e", "#202024", "#1c1c20", "#343439", "#3f3f46", "#121214"
 TEXT, HEADER, MUTED, DIM = "#dbdee1", "#f2f3f5", "#94959c", "#5c5d63"
 GREEN, GREEN_HOVER, FOCUS = "#23a55a", "#1a7f45", "#00a8fc"
 HOVER, SELECTED, GREY_BUTTON = "#2a2a2f", "#2e2e33", "#2e2e33"
+# device dropdown list, measured from Discord's: rows full width, grey text, white icon on the hovered / chosen row
+MENU, MENU_BORDER, ROW_HOVER, ROW_SELECTED, ROW_TEXT = "#28282d", "#35353b", "#35353b", "#3e3e44", "#abacb2"
 # stream viewer: black control strip, grouped buttons, red end button, grey side icons
 DC_GROUP, DC_GROUP_BORDER, DC_RED, DC_RED_HOVER = "#0a0a0c", "#26262b", "#d22d39", "#a8232d"
 DC_TEXT, DC_ICON, DC_PILL, DC_TOOLTIP = TEXT, "#d4d5d9", "#4f505a", "#111214"
@@ -59,6 +62,7 @@ TR = {
     "de": {
         "subtitle": "Capture-Card- & Webcam-Viewer", "video": "Video", "audio": "Audio", "advanced": "Erweitert",
         "device": "Gerät", "res": "Auflösung", "fps": "FPS", "input": "Eingang", "output": "Ausgabe (Monitor)",
+        "webcam": "Webcam", "card": "Capture-Card",
         "off": "Aus", "volume": "Lautstärke: {} %", "listen": "Ausgabe aktivieren",
         "delay": "Verzögerung: {} ms", "low_latency": "  (Low-Latency)", "auto_exp": "Auto-Belichtung (Webcam)",
         "exposure": "Belichtung: 1/{} s  (kürzer = dunkler, mehr FPS)",
@@ -85,6 +89,7 @@ TR = {
     "en": {
         "subtitle": "capture card & webcam viewer", "video": "Video", "audio": "Audio", "advanced": "Advanced",
         "device": "Device", "res": "Resolution", "fps": "FPS", "input": "Input", "output": "Output (monitor)",
+        "webcam": "Webcam", "card": "Capture card",
         "off": "Off", "volume": "Volume: {} %", "listen": "Enable output",
         "delay": "Delay: {} ms", "low_latency": "  (low latency)", "auto_exp": "Auto exposure (webcam)",
         "exposure": "Exposure: 1/{} s  (shorter = darker, more FPS)",
@@ -116,6 +121,16 @@ ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin; FILL = drawn
     "muted": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
     "screen": '<rect x="3" y="4" width="18" height="12" rx="2" fill="FILL"/><path d="M12 16v4M8 20h8"/>',
     "stop": '<rect x="6" y="6" width="12" height="12" rx="2" fill="FILL"/>',
+    "mic": '<rect x="9" y="2" width="6" height="12" rx="3" fill="FILL"/>'
+           '<path d="M18.5 10v1a6.5 6.5 0 0 1-13 0v-1M12 17.5v4M8.5 21.5h7"/>',  # Discord's, with the foot
+    "webcam": '<path d="M9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17L15 2z'
+              'M12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10z" fill="FILL" fill-rule="evenodd" stroke="none"/>'
+              '<circle cx="12" cy="12" r="3.2" fill="FILL" stroke="none"/>',  # photo camera, solid
+    "card": '<rect x="2" y="7" width="15" height="10" rx="2" fill="FILL"/><path d="M17 10h4v4h-4"/>',  # USB grabber
+    "headphones": '<path d="M2.6 13.6A9.6 9.6 0 1 1 21.4 13.6" stroke-width="1.5"/>'  # Discord's: thin band,
+                  '<ellipse cx="6.8" cy="16.6" rx="3.3" ry="5.2" transform="rotate(-40 6.8 16.6)" fill="FILL" '
+                  'stroke="none"/><ellipse cx="17.2" cy="16.6" rx="3.3" ry="5.2" transform="rotate(40 17.2 16.6)" '
+                  'fill="FILL" stroke="none"/>',  # tilted cups, V-shaped gap
     "fullscreen": '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2'
                   'M8 20H6a2 2 0 0 1-2-2v-2"/>',  # Discord: four corners, rounded joints
     "windowed": '<path d="M8 4v2a2 2 0 0 1-2 2H4M16 4v2a2 2 0 0 0 2 2h2M16 20v-2a2 2 0 0 1 2-2h2'
@@ -132,21 +147,27 @@ QFrame#card, QFrame#head {{ background: {SURFACE}; border: none; border-radius: 
 QLabel {{ background: transparent; }}
 QLabel[role="title"] {{ color: {HEADER}; font-size: 20px; font-weight: 600; }}
 QLabel[role="logo"] {{ color: {HEADER}; font-size: 17px; font-weight: 600; }}
-QLabel[role="label"] {{ color: {HEADER}; font-size: 14px; font-weight: 600; }}
+QLabel[role="label"] {{ color: {HEADER}; font-size: 15px; font-weight: 600; }}
 QLabel[role="hint"] {{ color: {MUTED}; font-size: 13px; }}
 QLabel[role="hint"]:disabled, QLabel[role="label"]:disabled {{ color: {DIM}; }}
-QComboBox {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 0 10px; min-height: 30px;
-             font-weight: 600; combobox-popup: 0; }}
+QComboBox {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 0 12px; min-height: 38px;
+             font-size: 15px; font-weight: 600; combobox-popup: 0; }}
 QComboBox:hover, QComboBox:on {{ border-color: #4a4a50; }}
 QComboBox:focus {{ border-color: {FOCUS}; }}
 QComboBox:disabled {{ color: {DIM}; }}
-QComboBox::drop-down {{ border: none; width: 28px; }}
-QComboBox::down-arrow {{ image: url("{(ASSETS / "chevron.svg").as_posix()}"); width: 12px; height: 12px; }}
-QComboBox QAbstractItemView {{ background: {FIELD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 4px;
-                               outline: none; }}
-QComboBox QAbstractItemView::item {{ min-height: 32px; padding: 0 8px; border-radius: 6px; font-weight: 600; }}
-QComboBox QAbstractItemView::item:hover {{ background: {HOVER}; }}
-QComboBox QAbstractItemView::item:selected {{ background: {SELECTED}; color: {HEADER}; }}
+QComboBox::drop-down {{ border: none; width: 32px; }}
+QComboBox::down-arrow {{ image: url("{(ASSETS / "chevron.svg").as_posix()}"); width: 16px; height: 16px; }}
+QComboBox::down-arrow:on {{ image: url("{(ASSETS / "chevron_up.svg").as_posix()}"); }}
+QComboBox QAbstractItemView {{ background: {MENU}; border: 1px solid {MENU_BORDER}; border-radius: 8px; padding: 0;
+                               outline: none; }}  /* rows: Combo.Row */
+/* Discord's thin scroller: no arrows, no track, a slim round light thumb */
+QComboBox QAbstractItemView QScrollBar:vertical {{ background: transparent; width: 8px; margin: 4px 2px 4px 0; }}
+QComboBox QAbstractItemView QScrollBar::handle:vertical {{ background: {MUTED}; border-radius: 3px; min-height: 32px;
+                                                          }}
+QComboBox QAbstractItemView QScrollBar::add-line:vertical, QComboBox QAbstractItemView QScrollBar::sub-line:vertical
+    {{ height: 0; }}
+QComboBox QAbstractItemView QScrollBar::add-page:vertical, QComboBox QAbstractItemView QScrollBar::sub-page:vertical
+    {{ background: none; }}
 QComboBox#lang {{ min-height: 28px; }}
 QSlider:horizontal {{ min-height: 18px; }}  /* room for the 14px knob, else it gets clipped */
 QSlider::groove:horizontal {{ height: 4px; background: {TRACK}; border-radius: 2px; }}
@@ -177,6 +198,7 @@ QFrame#bar {{ background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 rg
                                           stop: 1 rgba(0, 0, 0, 200)); border: none; }}  /* soft fade over video */
 QFrame#bar QToolButton {{ background: transparent; border: none; border-radius: 8px; }}
 QFrame#bar QToolButton:hover {{ background: rgba(255, 255, 255, 26); }}
+QFrame#bar QToolButton#plain:hover {{ background: transparent; }}  /* speaker, fullscreen: icon turns white instead */
 QFrame#group {{ background: {DC_GROUP}; border: 1px solid {DC_GROUP_BORDER}; border-radius: 12px; }}
 QFrame#bar QToolButton#stop {{ background: {DC_RED}; border-radius: 12px; }}
 QFrame#bar QToolButton#stop:hover {{ background: {DC_RED_HOVER}; }}
@@ -189,6 +211,7 @@ QFrame#pill QLabel#quality {{ background: {DC_PILL}; border-top-left-radius: 10p
 QFrame#pill QLabel#live {{ background: {DC_RED}; border-top-right-radius: 10px; border-bottom-right-radius: 10px; }}
 /* Discord's stream volume: a 6px bar in a 2px black frame, round on top, standing flush on the control strip */
 QFrame#volpop {{ background: #000; border-radius: 5px; }}
+QLabel#balloon {{ color: {DC_TEXT}; padding: 10px 14px 16px 14px; font-size: 14px; font-weight: 600; }}  /* 6px tip */
 QToolTip {{ background: {DC_TOOLTIP}; color: {DC_TEXT}; border: none; padding: 6px 10px; font-size: 13px;
             font-weight: 600; }}
 """
@@ -198,10 +221,49 @@ def svg_icon(svg):
     return QIcon(QPixmap.fromImage(QImage.fromData(QByteArray(svg.encode()), "SVG")))
 
 
-def icon(name, color=TEXT, weight=2):
-    return svg_icon(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
-                    f'stroke="{color}" stroke-width="{weight}" stroke-linecap="round" stroke-linejoin="round">'
-                    f'{ICONS[name].replace("FILL", color)}</svg>')
+@functools.cache  # dropdowns ask for the same few on every device refresh
+def icon(name, color=TEXT, weight=2, hover=None):
+    svg = lambda c: (f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
+                     f'stroke="{c}" stroke-width="{weight}" stroke-linecap="round" stroke-linejoin="round">'
+                     f'{ICONS[name].replace("FILL", c)}</svg>')
+    ic = svg_icon(svg(color))
+    if hover:  # QToolButton shows the Active mode under the mouse (with autoRaise)
+        ic.addPixmap(svg_icon(svg(hover)).pixmap(48, 48), QIcon.Mode.Active)
+    return ic
+
+
+HANDS = {  # cursor shapes on Lucide's hand grid: fingers (x, top, bottom, fanned out by degrees) + palm with thumb
+    "hand": (((6, 4, 15, -10), (10, 2, 13, -3), (14, 4, 13, 4), (18, 6, 14, 11)),
+             "M6 11h16v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-6-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L6 14z"),
+    "grab": (((6, 7, 14, 0), (10, 6, 12, 0), (14, 7, 12, 0), (18, 9, 13, 0)),
+             "M2 14a2 2 0 0 1 4 0v-2h16v2a8 8 0 0 1-8 8h-4a8 8 0 0 1-8-8z"),
+}
+
+
+@functools.cache
+def grab_cursor(name, size=20):
+    """Qt's own open/closed hand is a blown-up 16px bitmap on Windows; this is a small crisp one: a white hand with a
+    black rim, like the system cursors. Black strokes under a white fill: only the rim and the finger gaps stay."""
+    fingers, palm = HANDS[name]
+    shapes = "".join(f'<rect x="{x + .4}" y="{top}" width="3.2" height="{bottom - top}" rx="1.6" '
+                     f'transform="rotate({deg} {x + 2} {bottom})"/>'
+                     for x, top, bottom, deg in fingers) + f'<path d="{palm}"/>'
+    img = QImage.fromData(QByteArray(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size * 2}" height="{size * 2}" viewBox="-1 -1 26 26">'
+        f'<g fill="#fff" stroke="#000" stroke-width="2.4" stroke-linejoin="round">{shapes}</g>'
+        f'<g fill="#fff">{shapes}</g></svg>'.encode()), "SVG")
+    img.setDevicePixelRatio(2)
+    return QCursor(QPixmap.fromImage(img), size // 2, size // 2)
+
+
+def hand(w):
+    """Pointing hand on clickables; sliders get a spread hand that closes while dragging."""
+    if isinstance(w, QSlider):
+        w.setCursor(grab_cursor("hand"))
+        w.sliderPressed.connect(lambda: w.setCursor(grab_cursor("grab")))
+        w.sliderReleased.connect(lambda: w.setCursor(grab_cursor("hand")))
+    else:
+        w.setCursor(Qt.CursorShape.PointingHandCursor)
 
 
 def flag(lang):
@@ -226,6 +288,18 @@ def windows_exposure(name, manual, value):
         if manual:
             cap.set(cv2.CAP_PROP_EXPOSURE, value)
         cap.release()
+
+
+def split_device(text):
+    """'Mikrofon (Razer BlackShark V2 Pro)' -> ('Razer BlackShark V2 Pro', 'Mikrofon'): name and type, as Discord
+    lists devices. Names without a type stay as they are."""
+    m = re.fullmatch(r"(.+?) \((.+)\)", text)
+    return (m[2], m[1]) if m else (text, "")
+
+
+def is_webcam(name):
+    """Capture card or webcam: only webcams have exposure control (Windows; elsewhere everything counts as webcam)."""
+    return sys.platform != "win32" or not name or windows_has_exposure(name)
 
 
 @functools.cache
@@ -352,7 +426,6 @@ class Toggle(QAbstractButton):
         super().__init__()
         self.setCheckable(True)
         self.setChecked(checked)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # Tab + Space; a mouse click doesn't leave a focus ring
         self.pos_ = float(checked)  # knob position 0..1, slides on toggle
         self.anim = QVariantAnimation(self, duration=160, easingCurve=QEasingCurve.Type.OutCubic)
@@ -421,45 +494,202 @@ class VolumeBar(QSlider):
             p.drawRoundedRect(QRectF(r.left(), r.bottom() - level, r.width(), level), radius, min(radius, level / 2))
 
     def mousePressEvent(self, ev):
+        self.setSliderDown(True)  # emits sliderPressed, like a plain QSlider
         self.set_from(ev.position().y())
 
     def mouseMoveEvent(self, ev):  # only while pressed (no mouse tracking)
         self.set_from(ev.position().y())
 
+    def mouseReleaseEvent(self, _):
+        self.setSliderDown(False)
+
     def set_from(self, y):
         self.setValue(round(self.maximum() * (1 - y / self.height())))  # setValue clamps to 0..100
 
 
-class Combo(QComboBox):
-    """Dropdown whose popup list is exactly as wide as the field."""
+class Balloon(QLabel):
+    """Discord's tooltip: a rounded bubble with a small tip pointing at the button, faded in right above it. A child
+    widget, not a QToolTip window: those open at the cursor, animate in, and can't have round corners."""
 
-    def __init__(self):
+    ARROW = 6
+
+    def __init__(self, parent):
+        super().__init__(parent, objectName="balloon")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.fade = QGraphicsOpacityEffect(self, opacity=0)
+        self.setGraphicsEffect(self.fade)
+        self.anim = QPropertyAnimation(self.fade, b"opacity", self, duration=120)
+        self.anim.finished.connect(self.faded)
+        self.hide()
+
+    def pop(self, w):
+        self.setText(w.toolTip())
+        self.adjustSize()
+        top = w.mapTo(self.parentWidget(), QPoint(w.width() // 2, 0))
+        x = min(top.x() - self.width() // 2, self.parentWidget().width() - self.width() - 8)  # 8px off the edge
+        self.move(max(x, 8), top.y() - self.height() - 4)  # tip ~14px above the icon
+        self.tip_x = top.x() - self.x()  # the arrow still points at the button when shifted
+        self.show()
+        self.raise_()
+        self.fade_to(1)
+
+    def fade_to(self, opacity):
+        self.fade.setEnabled(True)
+        self.anim.stop()
+        self.anim.setEndValue(opacity)
+        self.anim.start()
+
+    def faded(self):
+        if self.fade.opacity() == 0:
+            self.hide()
+        else:
+            self.fade.setEnabled(False)  # no offscreen re-render on every video frame while it stays up
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(DC_TOOLTIP))
+        r = QRectF(self.rect()).adjusted(0, 0, 0, -self.ARROW)
+        p.drawRoundedRect(r, 7, 7)
+        x = min(max(self.tip_x, r.left() + 10), r.right() - 10)  # clear of the round corners
+        p.drawPolygon([QPointF(x - self.ARROW, r.bottom()), QPointF(x + self.ARROW, r.bottom()),
+                       QPointF(x, r.bottom() + self.ARROW)])
+        p.end()
+        super().paintEvent(ev)
+
+
+class Combo(QComboBox):
+    """Dropdown after Discord's device picker: the list opens a little off the field and exactly as wide. Rows show
+    icon, name and a grey second line (the device type), the current one highlighted with a blurple check; the field
+    shows the name with the type in grey after it."""
+
+    class Row(QStyledItemDelegate):
+        def sizeHint(self, opt, index):
+            return QSize(0, 64 if Combo.parts(index)[1] else 44)
+
+        def paint(self, p, opt, index):
+            title, sub, glyph = Combo.parts(index)
+            current = index.row() == self.parent().currentIndex()
+            hot = bool(opt.state & QStyle.StateFlag.State_Selected)  # follows the mouse (and the arrow keys)
+            r = QRectF(opt.rect)
+            p.save()
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setPen(Qt.PenStyle.NoPen)
+            if current or hot:  # full width; round only where the list's own corners are
+                p.setClipRect(r)
+                p.setBrush(QColor(ROW_SELECTED if current else ROW_HOVER))
+                last = index.row() == index.model().rowCount() - 1
+                p.drawRoundedRect(r.adjusted(0, 0 if index.row() == 0 else -8, 0, 0 if last else 8), 7, 7)
+                p.setClipping(False)
+            x, right = r.left() + 14, r.right() - (40 if current else 14)
+            ic = icon(glyph, HEADER if current or hot else ROW_TEXT) if glyph else index.data(
+                Qt.ItemDataRole.DecorationRole)
+            if ic:
+                ic.paint(p, QRect(int(x), int(r.center().y()) - 10, 20, 20))
+                x += 28
+            font = QFont(opt.font)
+            font.setPixelSize(16)
+            font.setWeight(QFont.Weight.Medium)
+            p.setFont(font)
+            p.setPen(QColor(ROW_TEXT))
+            line = QRectF(x, r.top() + 11, right - x, 22) if sub else QRectF(x, r.top(), right - x, r.height())
+            align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            p.drawText(line, align, p.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, int(line.width())))
+            if sub:
+                font.setPixelSize(12)
+                font.setWeight(QFont.Weight.Normal)
+                p.setFont(font)
+                p.setPen(QColor(MUTED))
+                line = QRectF(x, r.top() + 35, right - x, 18)
+                p.drawText(line, align, p.fontMetrics().elidedText(sub, Qt.TextElideMode.ElideRight,
+                                                                    int(line.width())))
+            if current:
+                c = QPointF(r.right() - 18, r.center().y())
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(ACCENT))
+                p.drawEllipse(c, 9, 9)
+                p.setPen(QPen(QColor("#fff"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                              Qt.PenJoinStyle.RoundJoin))
+                p.drawPolyline([c + QPointF(-4, 0), c + QPointF(-1.2, 2.8), c + QPointF(4, -2.6)])
+            p.restore()
+
+    @staticmethod
+    def parts(index):
+        """(name, type, glyph) of a row; entries added without them (language list) are just their text."""
+        return index.data(Qt.ItemDataRole.UserRole) or (index.data(), "", None)
+
+    def __init__(self, glyph=None):
         super().__init__()
-        self.setItemDelegate(QStyledItemDelegate(self))  # lets the stylesheet style the items
+        self.glyph = glyph
+        self.setItemDelegate(self.Row(self))
+        self.view().viewport().installEventFilter(self)
+        self.view().setVerticalScrollMode(self.view().ScrollMode.ScrollPerPixel)
+        self.scroller = QPropertyAnimation(self.view().verticalScrollBar(), b"value", self, duration=180,
+                                           easingCurve=QEasingCurve.Type.OutCubic)  # smooth wheel (eventFilter)
+        self.setIconSize(QSize(20, 20))
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.setMinimumContentsLength(6)
         popup = self.view().window()  # own top-level window: transparent, so only the list's rounded frame shows
         popup.setWindowFlags(popup.windowFlags() | Qt.WindowType.FramelessWindowHint
                              | Qt.WindowType.NoDropShadowWindowHint)
         popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        popup.setMouseTracking(True)  # the open list grabs the mouse: moves off it land here (eventFilter)
+        popup.installEventFilter(self)
 
     def showPopup(self):
         super().showPopup()
-        self.view().window().setFixedWidth(self.width())
+        popup = self.view().window()
+        popup.setFixedWidth(self.width())
+        below = popup.y() >= self.mapToGlobal(QPoint()).y()  # Qt flips it above when the screen ends
+        popup.move(popup.x(), popup.y() + (10 if below else -10))
 
-    def paintEvent(self, _):  # like QComboBox, but long device names end in "…" instead of being cut off
+    def eventFilter(self, obj, ev):
+        """Qt keeps the last row under the mouse selected (= hovered): clear it once the mouse is off the rows."""
+        rows = self.view().viewport()
+        if ev.type() == QEvent.Type.Wheel and obj is rows:  # glide ~a row per notch instead of jumping 3 rows
+            bar = self.view().verticalScrollBar()
+            moving = self.scroller.state() == QPropertyAnimation.State.Running
+            target = (self.scroller.endValue() if moving else bar.value()) - ev.angleDelta().y() * 48 // 120
+            self.scroller.stop()
+            self.scroller.setStartValue(bar.value())
+            self.scroller.setEndValue(max(bar.minimum(), min(bar.maximum(), target)))
+            self.scroller.start()
+            return True
+        if ev.type() == QEvent.Type.Leave or (ev.type() == QEvent.Type.MouseMove and obj is not rows and not
+                                              rows.rect().contains(rows.mapFromGlobal(ev.globalPosition().toPoint()))):
+            self.view().selectionModel().clearSelection()
+        return super().eventFilter(obj, ev)
+
+    def paintEvent(self, _):  # Discord: icon, bold name, "(type)" in grey; long names end in "…", not cut off
         p, opt = QStylePainter(self), QStyleOptionComboBox()
         self.initStyleOption(opt)
         p.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, opt)
-        room = self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, opt,
-                                           QStyle.SubControl.SC_ComboBoxEditField, self).width()
-        opt.currentText = self.fontMetrics().elidedText(opt.currentText, Qt.TextElideMode.ElideRight, room - 4)
-        p.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, opt)
+        r = QRectF(self.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, opt,
+                                               QStyle.SubControl.SC_ComboBoxEditField, self))
+        title, sub, glyph = self.parts(self.model().index(self.currentIndex(), 0)) if self.count() else ("", "", None)
+        ic = icon(glyph, HEADER) if glyph else opt.currentIcon
+        if not ic.isNull():
+            w, h = opt.iconSize.width(), opt.iconSize.height()
+            ic.paint(p, QRect(int(r.left()), int(r.center().y() - h / 2), w, h), mode=QIcon.Mode.Normal if
+                     self.isEnabled() else QIcon.Mode.Disabled)
+            r.setLeft(r.left() + w + 8)
+        fm, align = self.fontMetrics(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        shown = fm.elidedText(title, Qt.TextElideMode.ElideRight, int(r.width()) - 4)
+        p.setPen(QColor(HEADER if self.isEnabled() else DIM))
+        p.drawText(r, align, shown)
+        if sub and shown == title:
+            r.setLeft(r.left() + fm.horizontalAdvance(title + " "))
+            p.setPen(QColor(MUTED if self.isEnabled() else DIM))
+            p.drawText(r, align, fm.elidedText(f"({sub})", Qt.TextElideMode.ElideRight, int(r.width()) - 4))
 
-    def fill(self, items, keep):
+    def fill(self, items, keep, rows=None):
+        """items: the device names (what is saved and matched); rows: (name, type, glyph) to show for each, by
+        default split from "Type (Name)" with the box's glyph."""
         self.blockSignals(True)
         self.clear()
-        self.addItems(items)
+        for text, (title, sub, glyph) in zip(items, rows or [(*split_device(t), self.glyph) for t in items]):
+            self.addItem(text, (title, sub, glyph))  # icons drawn by state: Row, paintEvent
         self.setCurrentIndex(max(self.findText(keep), 0))
         self.blockSignals(False)
 
@@ -516,14 +746,14 @@ class Live(QWidget):
         mid.addWidget(self.stop_btn)
 
         # Discord: a speaker icon next to fullscreen; hovering it opens a vertical volume slider above, click mutes
-        self.mute = QToolButton(iconSize=QSize(24, 24))
+        self.mute = QToolButton(iconSize=QSize(24, 24), objectName="plain", autoRaise=True)
         self.mute.setFixedSize(44, 44)  # square: even padding around the icon on hover
         self.mute.clicked.connect(main.toggle_mute)
         self.volpop = QFrame(self, objectName="volpop")
         pop = QVBoxLayout(self.volpop)
         pop.setContentsMargins(2, 2, 2, 2)  # Discord's slim 2px frame
         self.vol = VolumeBar()
-        self.vol.setFixedSize(6, 76)
+        self.vol.setFixedSize(6, 100)
         self.vol.valueChanged.connect(main.vol.setValue)
         pop.addWidget(self.vol, 0, Qt.AlignmentFlag.AlignHCenter)
         self.volpop.hide()
@@ -537,13 +767,16 @@ class Live(QWidget):
         p.addWidget(self.quality)
         p.addWidget(QLabel("LIVE", objectName="live"))
         self.info.hide()
-        self.full = QToolButton(icon=icon("fullscreen", DC_ICON, 2.2), iconSize=QSize(24, 24))
+        self.balloon = Balloon(self)
+        self.full = QToolButton(icon=icon("fullscreen", DC_ICON, 2.2, "#fff"), iconSize=QSize(24, 24),
+                                objectName="plain", autoRaise=True)
         self.full.setFixedSize(44, 44)
         self.full.clicked.connect(self.toggle_fullscreen)
         for w in (self.mute, self.full):
             right.addWidget(w)
         for w in (self.gear, self.stop_btn, self.mute, self.vol, self.full):
             w.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # reachable by keyboard, no focus ring after a click
+            hand(w)
             w.installEventFilter(self)
         self.bar.hide()
         self.bar.installEventFilter(self)
@@ -683,6 +916,10 @@ class Live(QWidget):
                 self.hider.stop() if entering else self.hider.start()
             if obj in (self.mute, self.volpop):  # speaker <-> slider popup, with a short grace period between
                 self.show_volume() if entering else self.pop_hider.start()
+            if obj.toolTip():
+                self.balloon.pop(obj) if entering else self.balloon.fade_to(0)
+        elif kind == QEvent.Type.ToolTip:
+            return True  # the balloon shows it instead
         return False
 
     def toggle_fullscreen(self):
@@ -691,7 +928,8 @@ class Live(QWidget):
 
     def changeEvent(self, ev):
         if ev.type() == QEvent.Type.WindowStateChange:
-            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen", DC_ICON, 2.2))
+            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen", DC_ICON, 2.2, "#fff"))
+            self.balloon.hide()  # the button moved; text and place are stale
             self.retranslate()
 
     def retranslate(self):
@@ -780,7 +1018,7 @@ class Main(QWidget):
         cols.setSpacing(16)
         root.addLayout(cols)
         card = self.card(cols, "video")
-        self.video = self.field(card, "device")
+        self.video = self.field(card, "device")  # icon per device: webcam or capture card (refresh)
         row = QHBoxLayout()
         row.setSpacing(8)
         card.addLayout(row)
@@ -788,11 +1026,11 @@ class Main(QWidget):
         card.addStretch()
 
         card = self.card(cols, "audio")
-        self.ain = self.field(card, "input")
+        self.ain = self.field(card, "input", "mic")
         self.listen = self.tr_(Toggle(self.st.value("listen", True, type=bool)), "listen")
         card.addWidget(self.listen)
         card.addSpacing(6)
-        self.aout = self.field(card, "output")
+        self.aout = self.field(card, "output", "headphones")
         self.vol_lbl, self.vol = self.slider(card, 0, 100, int(self.st.value("volume", 100)))
         card.addStretch()
 
@@ -805,18 +1043,18 @@ class Main(QWidget):
         if sys.platform == "darwin":  # AVFoundation exposes no exposure control for USB cameras
             self.auto_exp.setEnabled(False)
 
-        self.btn = self.tr_(QPushButton(objectName="start", cursor=Qt.CursorShape.PointingHandCursor), "start")
+        self.btn = self.tr_(QPushButton(objectName="start"), "start")
         self.btn.clicked.connect(self.start)
         root.addWidget(self.btn)
         foot = QHBoxLayout()
         foot.setSpacing(10)
         self.status = QLabel(objectName="status")
         foot.addWidget(self.status, 1)
-        self.upd = QPushButton(objectName="update", cursor=Qt.CursorShape.PointingHandCursor)
+        self.upd = QPushButton(objectName="update")
         self.upd.clicked.connect(self.open_download)
         self.upd.hide()
         foot.addWidget(self.upd)
-        self.inst = self.tr_(QPushButton(objectName="update", cursor=Qt.CursorShape.PointingHandCursor), "install")
+        self.inst = self.tr_(QPushButton(objectName="update"), "install")
         self.inst.clicked.connect(self.install)
         self.inst.setVisible(WIN_FROZEN and not installed())
         foot.addWidget(self.inst)
@@ -857,9 +1095,10 @@ class Main(QWidget):
         if geo := self.st.value("geo_main"):  # position of the last session (Qt keeps it on a connected screen)
             self.restoreGeometry(geo)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # the window holds focus at start, not the first dropdown
-        for kind in (QComboBox, QSlider, QPushButton):
+        for kind in (QComboBox, QSlider, QAbstractButton):
             for w in self.findChildren(kind):
                 w.setFocusPolicy(Qt.FocusPolicy.TabFocus)  # focus ring only via keyboard; clicks work without focus
+                hand(w)
         dark_titlebar(self)
         self.net = QNetworkAccessManager(self)
         if VERSION != "dev":
@@ -884,12 +1123,12 @@ class Main(QWidget):
         lay.addSpacing(8)
         return lay
 
-    def field(self, lay, key):
+    def field(self, lay, key, glyph=None):
         box = QVBoxLayout()
         box.setSpacing(6)
         lbl = self.tr_(label(role="label"), key)
         box.addWidget(lbl)
-        combo = Combo()
+        combo = Combo(glyph)
         box.addWidget(combo)
         box.addSpacing(6)
         lay.addLayout(box)
@@ -939,7 +1178,10 @@ class Main(QWidget):
     def refresh(self):
         self.cams, self.ains, self.aouts = (QMediaDevices.videoInputs(), QMediaDevices.audioInputs(),
                                             QMediaDevices.audioOutputs())
-        self.video.fill([d.description() for d in self.cams], self.video.currentText() or self.st.value("video", ""))
+        names = [d.description() for d in self.cams]
+        kinds = ["webcam" if is_webcam(n) else "card" for n in names]
+        self.video.fill(names, self.video.currentText() or self.st.value("video", ""),
+                        [(n, self.t(k), k) for n, k in zip(names, kinds)])
         off = self.t("off")
         keep_in = self.ain.currentText() if self.ain.count() else self.st.value("audio_in", off)
         self.ain.fill([off] + [d.description() for d in self.ains],
@@ -958,7 +1200,7 @@ class Main(QWidget):
         """Exposure controls only for webcams: a capture card passes its source's picture through as is.
         A webcam starts on auto exposure; manual holds until the next device switch (not on refresh / language)."""
         name = self.video.currentText()
-        webcam = sys.platform != "win32" or not name or windows_has_exposure(name)
+        webcam = is_webcam(name)
         for w in (self.auto_exp, self.exp_lbl, self.exp):
             w.setVisible(webcam)
         if webcam and name != self.exp_dev:
@@ -1130,7 +1372,7 @@ class Main(QWidget):
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
         level = "muted" if not on or vol == 0 else "volume_low" if vol < 50 else "volume"
-        self.live.mute.setIcon(icon(level, DC_ICON))
+        self.live.mute.setIcon(icon(level, DC_ICON, hover="#fff"))
         self.live.retranslate()
         if self.speaker:
             self.speaker.setVolume(vol / 100 if on else 0)

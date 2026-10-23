@@ -9,8 +9,8 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from PySide6.QtCore import QEvent, QSettings, Qt  # noqa: E402
-from PySide6.QtGui import QKeyEvent  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, QSettings, Qt  # noqa: E402
+from PySide6.QtGui import QKeyEvent, QMouseEvent, QWheelEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import capturemax as c  # noqa: E402
@@ -45,6 +45,51 @@ class Logic(unittest.TestCase):
         self.assertEqual(box.currentText(), "b")
         box.fill(["x", "y"], "b")  # gone: falls back to the first entry
         self.assertEqual(box.currentText(), "x")
+
+    def test_combo_hover_cleared_when_mouse_leaves_list(self):
+        def move(widget, local):  # no button held: Qt drops it unless the widget tracks the mouse
+            app.sendEvent(widget, QMouseEvent(QEvent.Type.MouseMove, QPointF(local),
+                                              QPointF(widget.mapToGlobal(local)), Qt.MouseButton.NoButton,
+                                              Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier))
+
+        box = c.Combo()
+        box.fill(["a", "b", "c"], "a")
+        box.show()
+        box.showPopup()
+        view, sel = box.view(), box.view().selectionModel()
+        move(view.viewport(), view.visualRect(box.model().index(2, 0)).center())
+        self.assertTrue(sel.isSelected(box.model().index(2, 0)))  # hovered
+        popup = view.window()  # the open list has the mouse grab: a move off it goes to the popup window
+        move(popup, QPoint(popup.width() + 50, popup.height() // 2))
+        self.assertFalse(sel.hasSelection())
+        box.hidePopup()
+
+    def test_combo_wheel_scrolls_smoothly(self):
+        box = c.Combo()
+        box.fill([str(i) for i in range(30)], "0")
+        box.show()
+        box.showPopup()
+        bar = box.view().verticalScrollBar()
+        self.assertGreater(bar.maximum(), 100)
+        for _ in range(2):  # two notches add up, even mid-glide
+            app.sendEvent(box.view().viewport(), QWheelEvent(
+                QPointF(10, 10), QPointF(10, 10), QPoint(), QPoint(0, -120), Qt.MouseButton.NoButton,
+                Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False))
+        self.assertEqual(bar.value(), 0)  # not jumped: it glides
+        self.assertEqual(box.scroller.endValue(), 96)
+        box.scroller.setCurrentTime(box.scroller.duration())
+        self.assertEqual(bar.value(), 96)
+        box.hidePopup()
+
+    def test_device_names_split_like_discord(self):
+        self.assertEqual(c.split_device("Mikrofon (Razer BlackShark V2 Pro)"), ("Razer BlackShark V2 Pro", "Mikrofon"))
+        self.assertEqual(c.split_device("Realtek Digital Output (Realtek(R) Audio)"),
+                         ("Realtek(R) Audio", "Realtek Digital Output"))
+        self.assertEqual(c.split_device("UGREEN 25854"), ("UGREEN 25854", ""))
+        box = c.Combo("mic")
+        box.fill(["Mikrofon (Razer)"], "")
+        self.assertEqual(box.currentText(), "Mikrofon (Razer)")  # the full name is what gets saved and matched
+        self.assertEqual(tuple(box.currentData()), ("Razer", "Mikrofon", "mic"))
 
     def test_delay_buffer_holds_then_drops_backlog(self):
         shown = []
