@@ -1,23 +1,32 @@
 """captureMax: low-latency live viewer for capture cards and webcams on Windows, macOS and Linux (Qt Multimedia)."""
+import functools
+import json
 import sys
+import threading
 import time
+import urllib.request
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, QLocale, QPoint, QRect, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap
+from PySide6.QtCore import (QByteArray, QEasingCurve, QEvent, QLocale, QPoint, QPointF, QPropertyAnimation, QRect,
+                            QSettings, QSize, Qt, QTimer, QUrl, QVariantAnimation, Signal)
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QImage, QPainter, QPalette, QPixmap
 from PySide6.QtMultimedia import (QAudioFormat, QAudioSink, QAudioSource, QCamera, QMediaCaptureSession,
                                   QMediaDevices, QVideoFrameFormat, QVideoSink)
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QLayout,
-                               QProxyStyle, QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox,
-                               QStylePainter, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QFrame, QGraphicsDropShadowEffect,
+                               QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout, QMessageBox, QProxyStyle,
+                               QPushButton, QSlider, QStyle, QStyledItemDelegate, QStyleOptionComboBox, QStylePainter,
+                               QToolButton, QVBoxLayout, QWidget)
 
 APP = "captureMax"
+VERSION = "dev"  # release builds: CI writes the git tag here (.github/workflows/release.yml)
+REPO = "maxschroers/captureMax"
 ASSETS = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "assets"
-ACCENT, ACCENT_HOVER = "#4a80f5", "#3a64c4"
-BG, SURFACE, FIELD, BORDER = "#0e1a33", "#15254a", "#0e1a33", "#27407a"
-TEXT, MUTED = "#f2f5fc", "#8c9bc0"
-DANGER, DANGER_HOVER = "#e5484d", "#c43c40"
+ACCENT, ACCENT_HOVER, ACCENT_DEEP = "#3d7bff", "#5b8fff", "#2f6bff"
+BG, SURFACE, FIELD, TRACK = "#07090f", "#0e121c", "#151b29", "#232b3d"
+HAIRLINE, GLASS = "rgba(255, 255, 255, 18)", "rgba(7, 9, 15, 210)"
+TEXT, MUTED, DIM = "#eef2fb", "#a3adc4", "#4a556e"
+DANGER = "#e5484d"
 STATUS_COLORS = {"idle": MUTED, "ok": "#34d399", "err": "#f87171"}
 JPEG = QVideoFrameFormat.PixelFormat.Format_Jpeg
 LANGS = {"de": "Deutsch", "en": "English"}
@@ -43,6 +52,9 @@ TR = {
         "running": "läuft · {} · {:.0f} fps",
         "no_device": "Fehler: kein Videogerät gefunden", "no_frames": "Fehler: kein Bild vom Gerät (belegt?)",
         "error": "Fehler: {}",
+        "update": "Update auf v{} verfügbar",
+        "update_ask": "Version {} ist verfügbar (installiert: {}).\nJetzt herunterladen?", "yes": "Ja", "no": "Nein",
+        "discard": "Einstellungen wurden geändert. Ohne Speichern schließen?",
     },
     "en": {
         "subtitle": "capture card & webcam viewer", "video": "VIDEO", "audio": "AUDIO", "advanced": "ADVANCED",
@@ -55,6 +67,9 @@ TR = {
         "running": "running · {} · {:.0f} fps",
         "no_device": "Error: no video device found", "no_frames": "Error: no picture from device (in use?)",
         "error": "Error: {}",
+        "update": "Update to v{} available",
+        "update_ask": "Version {} is available (installed: {}).\nDownload it now?", "yes": "Yes", "no": "No",
+        "discard": "Settings were changed. Close without saving?",
     },
 }
 
@@ -63,48 +78,71 @@ ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin
     "muted": '<path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>'
              '<path d="M19 5a10 10 0 0 1 0 14"/><path d="M3 3l18 18"/>',  # struck-through speaker
     "stop": '<rect x="6" y="6" width="12" height="12" rx="2"/>',
+    "camera": '<path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/>',
+    "wave": '<path d="M2 12h1M6 9v6M10 5v14M14 8v8M18 10v4M21 12h1"/>',
     "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+    "fullscreen": '<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/>',
+    "windowed": '<path d="M8 3v3a2 2 0 0 1-2 2H3M21 8h-3a2 2 0 0 1-2-2V3M3 16h3a2 2 0 0 1 2 2v3M16 21v-3a2 2 0 0 1 2-2h3"/>',
     "settings": '<path d="M4 6h9M19 6h1M4 12h3M13 12h7M4 18h11M21 18h-1"/>'
                 '<circle cx="16" cy="6" r="2.5"/><circle cx="10" cy="12" r="2.5"/><circle cx="18" cy="18" r="2.5"/>',
 }
 
 QSS = f"""
-* {{ font-family: "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans", "DejaVu Sans", sans-serif;
-     font-size: 13px; color: {TEXT}; }}
-QWidget#main {{ background: {BG}; }}
-QFrame#card, QFrame#head {{ background: {SURFACE}; border-radius: 10px; }}
+* {{ font-family: "Segoe UI Variable Text", "Segoe UI", "SF Pro Text", "Helvetica Neue", "Noto Sans", "DejaVu Sans",
+     sans-serif; font-size: 14px; color: {TEXT}; }}
+QWidget#main {{ background: qradialgradient(cx: 0.1, cy: 0, radius: 1.1, fx: 0.1, fy: 0,
+                                            stop: 0 #0c1630, stop: 0.55 {BG}, stop: 1 {BG}); }}
+QFrame#card, QFrame#head {{ background: {SURFACE}; border: 1px solid {HAIRLINE}; border-radius: 14px; }}
 QLabel {{ background: transparent; }}
-QLabel[role="title"] {{ font-size: 14px; font-weight: bold; }}
-QLabel[role="logo"] {{ font-size: 16px; font-weight: bold; }}
-QLabel[role="hint"] {{ color: {MUTED}; font-size: 12px; }}
-QLabel[role="hint"]:disabled {{ color: {BORDER}; }}
-QComboBox {{ background: {FIELD}; border: none; border-radius: 8px; padding: 0 12px; min-height: 34px;
-             combobox-popup: 0; }}
-QComboBox:hover {{ background: {BORDER}; }}
-QComboBox:disabled {{ color: {BORDER}; background: {FIELD}; }}
+QLabel[role="title"] {{ color: {MUTED}; font-size: 12px; font-weight: 600; }}
+QLabel[role="logo"] {{ font-size: 17px; font-weight: 600; }}
+QLabel[role="hint"] {{ color: {MUTED}; font-size: 13px; }}
+QLabel[role="hint"]:disabled {{ color: {DIM}; }}
+QComboBox {{ background: {FIELD}; border: 1px solid {HAIRLINE}; border-radius: 8px; padding: 0 12px;
+             min-height: 32px; combobox-popup: 0; }}
+QComboBox:hover {{ border-color: rgba(255, 255, 255, 40); }}
+QComboBox:on {{ border-color: {ACCENT}; }}
+QComboBox:disabled {{ color: {DIM}; border-color: {HAIRLINE}; }}
 QComboBox::drop-down {{ border: none; width: 28px; }}
 QComboBox::down-arrow {{ image: url("{(ASSETS / "chevron.svg").as_posix()}"); width: 12px; height: 12px; }}
-QComboBox QAbstractItemView {{ background: {FIELD}; border: 1px solid {BORDER}; padding: 4px; outline: none; }}
+QComboBox QAbstractItemView {{ background: {SURFACE}; border: 1px solid {TRACK}; border-radius: 10px; padding: 4px;
+                               outline: none; }}
 QComboBox QAbstractItemView::item {{ min-height: 30px; padding: 0 8px; border-radius: 6px; }}
-QComboBox QAbstractItemView::item:hover {{ background: {BORDER}; }}
+QComboBox QAbstractItemView::item:hover {{ background: rgba(255, 255, 255, 14); }}
 QComboBox QAbstractItemView::item:selected {{ background: {ACCENT}; }}
-QComboBox#lang {{ min-height: 26px; padding: 0 8px; background: {FIELD}; }}
-QSlider::groove:horizontal {{ height: 4px; background: {BORDER}; border-radius: 2px; }}
-QSlider::sub-page:horizontal {{ background: {ACCENT}; border-radius: 2px; }}
-QSlider::handle:horizontal {{ background: {ACCENT}; width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; }}
-QSlider::sub-page:horizontal:disabled, QSlider::handle:horizontal:disabled {{ background: {BORDER}; }}
-QPushButton#start {{ background: {ACCENT}; border: none; border-radius: 12px; min-height: 48px;
-                     font-size: 16px; font-weight: bold; }}
-QPushButton#start:hover {{ background: {ACCENT_HOVER}; }}
-QLabel#status {{ background: {SURFACE}; border-radius: 16px; min-height: 32px; padding: 0 16px; font-size: 12px; }}
-QFrame#bar {{ background: rgba(21, 37, 74, 235); border: 1px solid {BORDER}; border-radius: 14px; }}
-QToolButton {{ background: {FIELD}; border: none; border-radius: 10px; min-width: 40px; min-height: 36px; }}
-QToolButton:hover {{ background: {BORDER}; }}
-QToolButton#stop {{ background: {DANGER}; }}
-QToolButton#stop:hover {{ background: {DANGER_HOVER}; }}
-QToolButton:checked {{ background: {ACCENT}; }}
-QLabel#info {{ background: rgba(21, 37, 74, 235); border: 1px solid {BORDER}; border-radius: 10px;
-               padding: 6px 12px; font-size: 12px; }}
+QComboBox#lang {{ min-height: 24px; padding: 0 8px; }}
+QSlider:horizontal {{ min-height: 22px; }}  /* room for the 16px handle, else its top gets clipped */
+QSlider::groove:horizontal {{ height: 4px; background: {TRACK}; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT_DEEP},
+                                                            stop: 1 {ACCENT_HOVER}); border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: #fff; border: 3px solid {ACCENT}; width: 10px; height: 10px;
+                              margin: -6px 0; border-radius: 8px; }}
+QSlider::handle:horizontal:hover {{ border-color: {ACCENT_HOVER}; }}
+QSlider::sub-page:horizontal:disabled {{ background: {TRACK}; }}
+QSlider::handle:horizontal:disabled {{ background: {DIM}; border-color: {TRACK}; }}
+QPushButton#start {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT_DEEP},
+                                                 stop: 1 {ACCENT_HOVER});
+                     border: none; border-radius: 12px; min-height: 48px; font-size: 16px; font-weight: 600;
+                     color: #fff; }}
+QPushButton#start:hover {{ background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0, stop: 0 {ACCENT},
+                                                       stop: 1 #7aa6ff); }}
+QPushButton#start:pressed {{ background: {ACCENT_DEEP}; }}
+QLabel#status {{ background: {SURFACE}; border: 1px solid {HAIRLINE}; border-radius: 16px; min-height: 30px;
+                 padding: 0 16px; font-size: 13px; }}
+QPushButton#update {{ background: rgba(61, 123, 255, 40); border: 1px solid {ACCENT}; border-radius: 16px;
+                      min-height: 30px; padding: 0 14px; font-size: 13px; font-weight: 600; }}
+QPushButton#update:hover {{ background: rgba(61, 123, 255, 80); }}
+QMessageBox {{ background: {SURFACE}; }}
+QMessageBox QPushButton {{ background: {FIELD}; border: 1px solid {HAIRLINE}; border-radius: 8px; min-height: 30px;
+                           min-width: 80px; padding: 0 16px; }}
+QMessageBox QPushButton:hover {{ border-color: {ACCENT}; }}
+QFrame#bar {{ background: {GLASS}; border: 1px solid {HAIRLINE}; border-radius: 18px; }}
+QToolButton {{ background: transparent; border: none; border-radius: 10px; min-width: 40px; min-height: 36px; }}
+QToolButton:hover {{ background: rgba(255, 255, 255, 20); }}
+QToolButton:checked {{ background: rgba(61, 123, 255, 70); }}
+QToolButton#stop:hover {{ background: rgba(229, 72, 77, 45); }}
+QLabel#info {{ background: {GLASS}; border: 1px solid {HAIRLINE}; border-radius: 10px; padding: 6px 12px;
+               font-family: "Cascadia Mono", "SF Mono", Menlo, "DejaVu Sans Mono", monospace; font-size: 13px; }}
 """
 
 
@@ -112,9 +150,9 @@ def svg_icon(svg):
     return QIcon(QPixmap.fromImage(QImage.fromData(QByteArray(svg.encode()), "SVG")))
 
 
-def icon(name):
+def icon(name, color=TEXT):
     return svg_icon(f'<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" '
-                    f'stroke="{TEXT}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+                    f'stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
 
 
 def flag(lang):
@@ -141,6 +179,45 @@ def windows_exposure(name, manual, value):
         cap.release()
 
 
+@functools.cache
+def windows_has_exposure(name):
+    """Webcams offer DirectShow's camera control (exposure range), capture cards and virtual cameras don't."""
+    from ctypes import POINTER, c_long
+    from comtypes import COMMETHOD, GUID, HRESULT, IUnknown
+    from pygrabber.dshow_graph import FilterGraph, SystemDeviceEnum
+    from pygrabber.dshow_ids import DeviceCategories
+
+    class IAMCameraControl(IUnknown):
+        _iid_ = GUID("{C6E13370-30AC-11d0-A18C-00A0C9118956}")
+        _methods_ = [COMMETHOD([], HRESULT, "GetRange", (["in"], c_long, "prop"),
+                               *[(["out"], POINTER(c_long), n) for n in ("lo", "hi", "step", "default", "flags")])]
+
+    names = FilterGraph().get_input_devices()
+    if name not in names:
+        return True  # unknown: keep the controls rather than hide them wrongly
+    try:
+        flt, _ = SystemDeviceEnum().get_filter_by_index(DeviceCategories.VideoInputDevice, names.index(name))
+        flt.QueryInterface(IAMCameraControl).GetRange(4)  # 4 = CameraControl_Exposure
+        return True
+    except Exception:
+        return False
+
+
+def version_key(v):
+    """0.10.2 -> (0, 10, 2), so versions compare numerically, not as text."""
+    return tuple(int(part) for part in v.split("."))
+
+
+def dark_titlebar(widget):
+    """Windows draws a light title bar by default: ask DWM for a dark one in our background colour (colour: Win 11)."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    bg = QColor(BG)
+    for attr, value in ((20, 1), (35, bg.red() | bg.green() << 8 | bg.blue() << 16)):  # dark mode, caption colour
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(int(widget.winId()), attr, ctypes.byref(ctypes.c_int(value)), 4)
+
+
 class JumpStyle(QProxyStyle):
     """Fusion, but a click on a slider jumps there instead of paging toward it."""
 
@@ -158,6 +235,20 @@ class Toggle(QAbstractButton):
         self.setCheckable(True)
         self.setChecked(checked)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pos_ = float(checked)  # knob position 0..1, slides on toggle
+        self.anim = QVariantAnimation(self, duration=160, easingCurve=QEasingCurve.Type.OutCubic)
+        self.anim.valueChanged.connect(self.slide)
+        self.toggled.connect(self.animate)
+
+    def animate(self, on):
+        self.anim.stop()
+        self.anim.setStartValue(self.pos_)
+        self.anim.setEndValue(float(on))
+        self.anim.start()
+
+    def slide(self, pos):
+        self.pos_ = pos
+        self.update()
 
     def sizeHint(self):
         return QSize(48 + self.fontMetrics().horizontalAdvance(self.text()), 24)
@@ -165,11 +256,13 @@ class Toggle(QAbstractButton):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setOpacity(1 if self.isEnabled() else 0.4)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(ACCENT if self.isChecked() else BORDER))
+        off, on = QColor(TRACK).getRgbF(), QColor(ACCENT).getRgbF()
+        p.setBrush(QColor.fromRgbF(*(a + (b - a) * self.pos_ for a, b in zip(off, on))))
         p.drawRoundedRect(0, 2, 38, 20, 10, 10)
-        p.setBrush(QColor(TEXT))
-        p.drawEllipse(QPoint(28 if self.isChecked() else 10, 12), 8, 8)
+        p.setBrush(QColor("#fff"))
+        p.drawEllipse(QPointF(10 + 18 * self.pos_, 12), 8, 8)
         p.setPen(QColor(TEXT))
         p.drawText(QRect(48, 0, self.width() - 48, self.height()), Qt.AlignmentFlag.AlignVCenter, self.text())
 
@@ -182,6 +275,10 @@ class Combo(QComboBox):
         self.setItemDelegate(QStyledItemDelegate(self))  # lets the stylesheet style the items
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.setMinimumContentsLength(6)
+        popup = self.view().window()  # own top-level window: transparent, so only the list's rounded frame shows
+        popup.setWindowFlags(popup.windowFlags() | Qt.WindowType.FramelessWindowHint
+                             | Qt.WindowType.NoDropShadowWindowHint)
+        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
     def showPopup(self):
         super().showPopup()
@@ -205,7 +302,7 @@ class Combo(QComboBox):
 
 
 class Live(QWidget):
-    """Video window: paints frames aspect-fit, hover bar with settings / mute / volume / info / stop at the bottom."""
+    """Video window: paints frames aspect-fit, hover bar with stop / mute / volume / info / settings / fullscreen."""
 
     def __init__(self, main):
         super().__init__()
@@ -226,8 +323,8 @@ class Live(QWidget):
         self.pct = label()
         self.pct.setFixedWidth(52)
         gear = QToolButton(icon=icon("settings"), iconSize=QSize(20, 20))
-        gear.clicked.connect(main.show_settings)
-        stop = QToolButton(icon=icon("stop"), iconSize=QSize(20, 20), objectName="stop")
+        gear.clicked.connect(main.toggle_settings)
+        stop = QToolButton(icon=icon("stop", DANGER), iconSize=QSize(20, 20), objectName="stop")
         stop.clicked.connect(main.stop)
         self.info = QLabel(self, objectName="info")
         info = QToolButton(icon=icon("info"), iconSize=QSize(20, 20), checkable=True)
@@ -235,12 +332,22 @@ class Live(QWidget):
         info.toggled.connect(lambda on: main.st.setValue("info", on))
         info.setChecked(main.st.value("info", False, type=bool))
         self.info.setVisible(info.isChecked())
-        for w in (gear, self.mute, self.vol, self.pct, info, stop):
+        self.full = QToolButton(icon=icon("fullscreen"), iconSize=QSize(20, 20))
+        self.full.clicked.connect(self.toggle_fullscreen)
+        for w in (stop, self.mute, self.vol, self.pct):  # stream + audio left, view controls right
+            lay.addWidget(w)
+        lay.addSpacing(16)
+        for w in (info, gear, self.full):
             lay.addWidget(w)
         self.bar.hide()
         self.bar.installEventFilter(self)
+        self.fade = QGraphicsOpacityEffect(self.bar, opacity=0)
+        self.bar.setGraphicsEffect(self.fade)
+        self.fader = QPropertyAnimation(self.fade, b"opacity", self)
+        self.fader.finished.connect(self.faded)
         self.hider = QTimer(self, singleShot=True, interval=1500)
-        self.hider.timeout.connect(self.bar.hide)
+        self.hider.timeout.connect(lambda: self.fade_to(0, 250))
+        dark_titlebar(self)
 
     def show_frame(self, frame):
         self.frame = frame
@@ -262,7 +369,22 @@ class Live(QWidget):
         self.bar.adjustSize()
         self.bar.move((self.width() - self.bar.width()) // 2, self.height() - self.bar.height() - 24)
         self.bar.show()
+        if self.fader.endValue() != 1:  # hidden or fading out
+            self.fade_to(1, 150)
         self.hider.start()
+
+    def fade_to(self, opacity, ms):
+        self.fade.setEnabled(True)
+        self.fader.stop()
+        self.fader.setDuration(ms)
+        self.fader.setEndValue(opacity)
+        self.fader.start()
+
+    def faded(self):
+        """Effect off once fully visible: it re-renders the bar offscreen on every video frame otherwise."""
+        if self.fade.opacity() == 0:
+            self.bar.hide()
+        self.fade.setEnabled(self.fade.opacity() < 1)
 
     def mouseMoveEvent(self, _):
         self.reveal()
@@ -288,15 +410,30 @@ class Live(QWidget):
             self.hider.start()
         return False
 
+    def toggle_fullscreen(self):
+        """Fullscreen has no title bar / frame, so a Discord window share shows only the picture."""
+        self.showNormal() if self.isFullScreen() else self.showFullScreen()
+
+    def changeEvent(self, ev):
+        if ev.type() == QEvent.Type.WindowStateChange:
+            self.full.setIcon(icon("windowed" if self.isFullScreen() else "fullscreen"))
+
+    def mouseDoubleClickEvent(self, _):
+        self.toggle_fullscreen()
+
     def keyPressEvent(self, ev):
-        if ev.key() == Qt.Key.Key_Escape:
-            self.close()
+        if ev.key() == Qt.Key.Key_F11:
+            self.toggle_fullscreen()
+        elif ev.key() == Qt.Key.Key_Escape:
+            self.showNormal() if self.isFullScreen() else self.close()
 
     def closeEvent(self, _):
         self.main.stop()
 
 
 class Main(QWidget):
+    update_found = Signal(str)  # emitted from the update-check thread, delivered on the GUI thread
+
     def __init__(self):
         super().__init__(objectName="main")
         self.setWindowTitle(APP)
@@ -321,12 +458,13 @@ class Main(QWidget):
         logo = QLabel()
         logo.setPixmap(QIcon(str(ASSETS / "icon.png")).pixmap(22, 22))
         h.addWidget(logo)
-        h.addWidget(label(f'capture<span style="color:{ACCENT}">MAX</span>', "logo"))
+        h.addWidget(label(f'capture<span style="color:{ACCENT}; font-weight:700">MAX</span>', "logo"))
         h.addStretch()
         h.addWidget(self.tr_(label(), "subtitle"))
         self.lang_box = Combo()
         self.lang_box.setObjectName("lang")
         self.lang_box.setIconSize(QSize(24, 16))
+        self.lang_box.setMinimumContentsLength(8)
         for code, name in LANGS.items():
             self.lang_box.addItem(flag(code), name)
         self.lang_box.setCurrentIndex(list(LANGS).index(self.lang))
@@ -338,7 +476,7 @@ class Main(QWidget):
         cols = QHBoxLayout()
         cols.setSpacing(16)
         root.addLayout(cols)
-        card = self.card(cols, "video")
+        card = self.card(cols, "video", "camera")
         self.video = self.field(card, "device")
         row = QHBoxLayout()
         row.setSpacing(8)
@@ -346,7 +484,7 @@ class Main(QWidget):
         self.res, self.fps = self.field(row, "res"), self.field(row, "fps")
         card.addStretch()
 
-        card = self.card(cols, "audio")
+        card = self.card(cols, "audio", "wave")
         self.ain = self.field(card, "input")
         self.listen = self.tr_(Toggle(self.st.value("listen", True, type=bool)), "listen")
         card.addWidget(self.listen)
@@ -355,7 +493,7 @@ class Main(QWidget):
         self.vol_lbl, self.vol = self.slider(card, 0, 100, int(self.st.value("volume", 100)))
         card.addStretch()
 
-        card = self.card(cols, "advanced")
+        card = self.card(cols, "advanced", "settings")
         self.buf_lbl, self.buf = self.slider(card, 0, 2000, int(self.st.value("buf", 0)), step=50)
         self.auto_exp = self.tr_(Toggle(self.st.value("auto_exp", True, type=bool)), "auto_exp")
         card.addWidget(self.auto_exp)
@@ -366,13 +504,26 @@ class Main(QWidget):
 
         self.btn = self.tr_(QPushButton(objectName="start", cursor=Qt.CursorShape.PointingHandCursor), "start")
         self.btn.clicked.connect(self.start)
+        self.btn.setGraphicsEffect(QGraphicsDropShadowEffect(self.btn, blurRadius=32, xOffset=0, yOffset=6,
+                                                             color=QColor(61, 123, 255, 110)))  # blue glow
         root.addWidget(self.btn)
+        foot = QHBoxLayout()
+        foot.setSpacing(10)
         self.status = QLabel(objectName="status")
-        root.addWidget(self.status)
+        foot.addWidget(self.status, 1)
+        self.upd = QPushButton(objectName="update", cursor=Qt.CursorShape.PointingHandCursor)
+        self.upd.clicked.connect(self.open_download)
+        self.upd.hide()
+        foot.addWidget(self.upd)
+        foot.addWidget(label(VERSION if VERSION == "dev" else f"v{VERSION}"))
+        root.addLayout(foot)
+        self.latest = None
+        self.update_found.connect(self.show_update)
 
         self.live = Live(self)
         self.video.currentIndexChanged.connect(self.fill_res)
         self.video.currentIndexChanged.connect(self.match_audio)
+        self.video.currentIndexChanged.connect(self.match_exposure)
         self.res.currentIndexChanged.connect(self.fill_fps)
         self.vol.valueChanged.connect(self.apply_audio)
         self.listen.toggled.connect(self.apply_audio)
@@ -390,6 +541,9 @@ class Main(QWidget):
         self.ticker = QTimer(self, interval=1000)
         self.ticker.timeout.connect(self.tick)
         self.ticker.start()
+        dark_titlebar(self)
+        if VERSION != "dev":
+            threading.Thread(target=self.check_update, daemon=True).start()
 
     # ---- building blocks
     def tr_(self, widget, key):
@@ -399,15 +553,26 @@ class Main(QWidget):
     def t(self, key, *args):
         return TR[self.lang][key].format(*args)
 
-    def card(self, cols, title):
+    def card(self, cols, title, icon_name):
         frame = QFrame(objectName="card")
-        frame.setMinimumWidth(330)
+        frame.setMinimumWidth(350)
         cols.addWidget(frame, 1)
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(16, 14, 16, 16)
         lay.setSpacing(6)
-        lay.addWidget(self.tr_(label(role="title"), title))
-        lay.addSpacing(4)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        pic = QLabel()
+        pic.setPixmap(icon(icon_name, ACCENT).pixmap(16, 16))
+        lbl = self.tr_(label(role="title"), title)
+        font = lbl.font()
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)  # spaced caps (QSS has no letter-spacing)
+        lbl.setFont(font)
+        head.addWidget(pic)
+        head.addWidget(lbl)
+        head.addStretch()
+        lay.addLayout(head)
+        lay.addSpacing(6)
         return lay
 
     def field(self, lay, key):
@@ -440,6 +605,8 @@ class Main(QWidget):
         self.update_labels()
         self.apply_audio()
         self.set_status(self.status_key, *self.status_args, kind=self.status_kind)
+        if self.latest:
+            self.upd.setText(self.t("update", self.latest))
 
     def update_labels(self):
         b = self.buf.value()
@@ -468,6 +635,14 @@ class Main(QWidget):
         self.aout.fill([d.description() for d in self.aouts], self.aout.currentText() or self.st.value(
             "audio_out", QMediaDevices.defaultAudioOutput().description()))
         self.fill_res()
+        self.match_exposure()
+
+    def match_exposure(self):
+        """Exposure controls only for webcams: a capture card passes its source's picture through as is."""
+        name = self.video.currentText()
+        webcam = sys.platform != "win32" or not name or windows_has_exposure(name)
+        for w in (self.auto_exp, self.exp_lbl, self.exp):
+            w.setVisible(webcam)
 
     def match_audio(self):
         """Capture cards / webcams show up as an audio input named after the camera ("Mikrofon (2- USB Capture)")."""
@@ -504,7 +679,9 @@ class Main(QWidget):
             return self.set_status("no_device", kind="err")
         self.stop()
         self.save()
-        dev, manual = self.cams[self.video.currentIndex()], self.auto_exp.isEnabled() and not self.auto_exp.isChecked()
+        self.saved = self.state()
+        dev = self.cams[self.video.currentIndex()]
+        manual = not self.auto_exp.isHidden() and self.auto_exp.isEnabled() and not self.auto_exp.isChecked()
         if sys.platform == "win32" and (manual or self.st.value("exp_was_manual", False, type=bool)):
             windows_exposure(dev.description(), manual, self.exp.value())
         self.st.setValue("exp_was_manual", manual)
@@ -576,6 +753,20 @@ class Main(QWidget):
             self.set_status("ready")
         self.show_settings()
 
+    def state(self):
+        """What "Save" restarts with. Volume / mute apply live from the hover bar, so they don't count."""
+        return (self.video.currentText(), self.res.currentText(), self.fps.currentText(), self.ain.currentIndex(),
+                self.aout.currentText(), self.buf.value(), self.auto_exp.isChecked(), self.exp.value())
+
+    def restore(self, s):
+        for combo, text in zip((self.video, self.res, self.fps), s):
+            combo.setCurrentText(text)
+        self.ain.setCurrentIndex(s[3])
+        self.aout.setCurrentText(s[4])
+        self.buf.setValue(s[5])
+        self.auto_exp.setChecked(s[6])
+        self.exp.setValue(s[7])
+
     def on_frame(self, frame):
         """Delay buffer: show the oldest frame that is at least `delay` old, drop older ones (no backlog).
         Kept cheap on purpose: frames arrive as queued signals, a slow slot here makes them pile up = lag."""
@@ -610,10 +801,50 @@ class Main(QWidget):
         if self.speaker:
             self.speaker.setVolume(vol / 100 if on else 0)
 
+    # ---- updates
+    def check_update(self):
+        """Runs in a thread: ask GitHub for the latest release, stay silent when offline / rate-limited."""
+        try:
+            with urllib.request.urlopen(f"https://api.github.com/repos/{REPO}/releases/latest", timeout=5) as r:
+                latest = json.load(r)["tag_name"].lstrip("v")
+            if version_key(latest) > version_key(VERSION):
+                self.update_found.emit(latest)
+        except Exception:
+            pass
+
+    def show_update(self, latest):
+        self.latest = latest
+        self.upd.setText(self.t("update", latest))
+        self.upd.show()  # stays as a reminder after "No"
+        if self.ask(self.t("update_ask", f"v{latest}", f"v{VERSION}")):
+            self.open_download()
+
+    def open_download(self):
+        QDesktopServices.openUrl(QUrl(f"https://github.com/{REPO}/releases/latest"))
+
+    def ask(self, text):
+        """Modal yes / no over the window, buttons in the app's language (Qt's own would be English)."""
+        box = QMessageBox(QMessageBox.Icon.Question, APP, text, parent=self)
+        yes = box.addButton(self.t("yes"), QMessageBox.ButtonRole.YesRole)
+        box.setDefaultButton(box.addButton(self.t("no"), QMessageBox.ButtonRole.NoRole))
+        box.exec()
+        return box.clickedButton() is yes
+
     def show_settings(self):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def hide_settings(self):
+        """While live: unsaved changes need a confirm, then get reverted so the panel matches what's running."""
+        if self.state() != self.saved:
+            if not self.ask(self.t("discard")):
+                return
+            self.restore(self.saved)
+        self.hide()
+
+    def toggle_settings(self):
+        self.hide_settings() if self.isVisible() and not self.isMinimized() else self.show_settings()
 
     def save(self):
         for key, value in (("video", self.video.currentText()), ("res", self.res.currentText()),
@@ -623,7 +854,10 @@ class Main(QWidget):
                            ("auto_exp", self.auto_exp.isChecked()), ("exp", self.exp.value())):
             self.st.setValue(key, value)
 
-    def closeEvent(self, _):
+    def closeEvent(self, ev):
+        if self.camera:  # live: settings is a panel over the stream, closing it keeps streaming
+            ev.ignore()
+            return self.hide_settings()
         self.save()
         self.stop()
         QApplication.quit()
