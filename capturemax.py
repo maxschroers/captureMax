@@ -85,7 +85,9 @@ TR = {
 }
 
 ICONS = {  # 24px stroke icons, rendered via Qt's SVG image plugin; FILL = drawn solid in the icon's colour
-    "volume": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/>',  # Discord's
+    "volume_low": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/>',  # Discord's
+    "volume": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/>'
+              '<path d="M17.6 7.4a6.5 6.5 0 0 1 0 9.2"/>',  # second wave from 50 %
     "muted": '<path d="M11 5 6 9H3v6h3l5 4V5z" fill="FILL"/><path d="M16 9.5l5 5M21 9.5l-5 5"/>',
     "screen": '<rect x="3" y="4" width="18" height="12" rx="2" fill="FILL"/><path d="M12 16v4M8 20h8"/>',
     "stop": '<rect x="6" y="6" width="12" height="12" rx="2" fill="FILL"/>',
@@ -420,9 +422,9 @@ class Live(QWidget):
         mid.addWidget(self.stop_btn)
 
         # Discord: a speaker icon next to fullscreen; hovering it opens a vertical volume slider above, click mutes
-        self.mute = QToolButton(iconSize=QSize(22, 22))
-        self.mute.setFixedSize(40, 40)  # square: even padding around the icon on hover
-        self.mute.clicked.connect(main.listen.toggle)
+        self.mute = QToolButton(iconSize=QSize(24, 24))
+        self.mute.setFixedSize(44, 44)  # square: even padding around the icon on hover
+        self.mute.clicked.connect(main.toggle_mute)
         self.volpop = QFrame(self, objectName="volpop")
         pop = QVBoxLayout(self.volpop)
         pop.setContentsMargins(2, 2, 2, 2)  # Discord's slim 2px frame
@@ -441,8 +443,8 @@ class Live(QWidget):
         p.addWidget(self.quality)
         p.addWidget(QLabel("LIVE", objectName="live"))
         self.info.hide()
-        self.full = QToolButton(icon=icon("fullscreen", DC_ICON, 2.2), iconSize=QSize(22, 22))
-        self.full.setFixedSize(40, 40)
+        self.full = QToolButton(icon=icon("fullscreen", DC_ICON, 2.2), iconSize=QSize(24, 24))
+        self.full.setFixedSize(44, 44)
         self.full.clicked.connect(self.toggle_fullscreen)
         for w in (self.mute, self.full):
             right.addWidget(w)
@@ -602,7 +604,7 @@ class Live(QWidget):
         """Tooltips + screen-reader names of the icon-only controls; language and state (muted, fullscreen) dependent."""
         t = self.main.t
         for w, key in ((self.gear, "tip_settings"), (self.stop_btn, "tip_stop"),
-                       (self.mute, "tip_mute" if self.main.listen.isChecked() else "tip_unmute"),
+                       (self.mute, "tip_unmute" if self.main.muted else "tip_mute"),
                        (self.full, "tip_window" if self.isFullScreen() else "tip_full"), (self.vol, "tip_volume")):
             w.setToolTip("" if w is self.mute else t(key))  # the speaker opens the volume popup instead
             w.setAccessibleName(t(key))
@@ -619,7 +621,7 @@ class Live(QWidget):
         elif key == Qt.Key.Key_Escape and self.isFullScreen():
             self.showNormal()
         elif key == Qt.Key.Key_M:
-            self.main.listen.toggle()
+            self.main.toggle_mute()
             self.reveal()
         elif key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             self.main.vol.setValue(self.main.vol.value() + (5 if key == Qt.Key.Key_Up else -5))
@@ -648,6 +650,7 @@ class Main(QWidget):
         self.lang = self.st.value("lang", default_lang)
         self.texts = []  # (widget, key) pairs re-labelled on language switch
         self.session = self.camera = self.mic = self.speaker = None
+        self.muted = False  # hover bar / M key, live only; "Enable output" in settings applies on Save
         self.frames, self.shown, self.last_frame, self.t0 = deque(), 0, 0.0, 0.0
         self.status_key, self.status_args, self.status_kind = "ready", (), "idle"
         self.exp_dev = None  # device the exposure controls were last set up for
@@ -731,7 +734,7 @@ class Main(QWidget):
         self.res.currentIndexChanged.connect(self.fill_fps)
         for sig in (self.video.currentIndexChanged, self.res.currentIndexChanged, self.fps.currentIndexChanged,
                     self.ain.currentIndexChanged, self.aout.currentIndexChanged, self.buf.valueChanged,
-                    self.exp.valueChanged, self.auto_exp.toggled):  # connected last: runs after the cascades above
+                    self.exp.valueChanged, self.auto_exp.toggled, self.listen.toggled):  # last: after the cascades
             sig.connect(self.update_save)
         self.vol.valueChanged.connect(self.apply_audio)
         self.listen.toggled.connect(self.apply_audio)
@@ -975,7 +978,8 @@ class Main(QWidget):
     def state(self):
         """What "Save" restarts with. Volume / mute apply live from the hover bar, so they don't count."""
         return (self.video.currentText(), self.res.currentText(), self.fps.currentText(), self.ain.currentIndex(),
-                self.aout.currentText(), self.buf.value(), self.auto_exp.isChecked(), self.exp.value())
+                self.aout.currentText(), self.buf.value(), self.auto_exp.isChecked(), self.exp.value(),
+                self.listen.isChecked())
 
     def restore(self, s):
         for combo, text in zip((self.video, self.res, self.fps), s):
@@ -985,6 +989,7 @@ class Main(QWidget):
         self.buf.setValue(s[5])
         self.auto_exp.setChecked(s[6])
         self.exp.setValue(s[7])
+        self.listen.setChecked(s[8])
 
     def on_frame(self, frame):
         """Delay buffer: show the oldest frame that is at least `delay` old, drop older ones (no backlog).
@@ -1009,14 +1014,21 @@ class Main(QWidget):
             self.live.set_info(f"{size.height()}p {fps:.0f} FPS")  # Discord's notation
         self.shown, self.t0 = 0, now
 
+    def toggle_mute(self):
+        self.muted = not self.muted
+        self.apply_audio()
+
     def apply_audio(self):
-        """Settings card and hover bar share volume/listen; the audio sink follows both."""
-        vol, on = self.vol.value(), self.listen.isChecked()
+        """Settings card and hover bar share the volume; the sink follows it, the hover mute and the saved
+        "Enable output" (the settings toggle only greys out the output field until Save)."""
+        vol = self.vol.value()
+        self.aout.setEnabled(self.listen.isChecked())
+        on = (self.saved[8] if self.camera else self.listen.isChecked()) and not self.muted
         self.vol_lbl.setText(self.t("volume", vol))
         self.live.vol.setValue(vol)
-        self.live.mute.setIcon(icon("volume", DC_ICON) if on else icon("muted", DC_RED))
+        level = "muted" if not on or vol == 0 else "volume_low" if vol < 50 else "volume"
+        self.live.mute.setIcon(icon(level, DC_ICON))
         self.live.retranslate()
-        self.aout.setEnabled(on)
         if self.speaker:
             self.speaker.setVolume(vol / 100 if on else 0)
 
