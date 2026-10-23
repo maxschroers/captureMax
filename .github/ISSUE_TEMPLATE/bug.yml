@@ -1,0 +1,45 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: captureMax version
+      description: Shown bottom right in the app, e.g. v0.0.7
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows 11, Windows 10, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Video device
+      description: Webcam or capture card, with model, e.g. "Elgato HD60 X (capture card)"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Select ...
+        2. Press Start
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots / anything else

@@ -7,10 +7,11 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read  # pull requests (also from forks) build read-only; only the release job may write
 
 jobs:
   build:
+    name: build (${{ matrix.os }})  # short, stable check names for the main branch ruleset
     strategy:
       fail-fast: false
       matrix:
@@ -77,6 +78,8 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v5
         with:
