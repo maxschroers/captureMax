@@ -10,7 +10,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from PySide6.QtCore import (QByteArray, QEasingCurve, QEvent, QLocale, QPoint, QPointF, QPropertyAnimation, QRect,
+from PySide6.QtCore import (QByteArray, QCameraPermission, QMicrophonePermission, QEasingCurve, QEvent, QLocale, QPoint, QPointF, QPropertyAnimation, QRect,
                             QRectF, QSettings, QSize, Qt, QTimer, QUrl, QVariantAnimation)
 from PySide6.QtGui import QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtMultimedia import (QAudioFormat, QAudioSink, QAudioSource, QCamera, QMediaCaptureSession,
@@ -70,6 +70,8 @@ TR = {
         "start": "Start", "save": "Speichern", "ready": "bereit", "starting": "starte...",
         "running": "läuft · {} · {:.0f} fps",
         "no_device": "Fehler: kein Videogerät gefunden", "no_frames": "Fehler: kein Bild vom Gerät (belegt?)",
+        "cam_denied": "Fehler: kein Kamerazugriff, in den Systemeinstellungen unter Datenschutz & Sicherheit erlauben",
+        "mic_denied": "Fehler: kein Mikrofonzugriff, in den Systemeinstellungen unter Datenschutz & Sicherheit erlauben",
         "error": "Fehler: {}",
         "update": "Update auf v{} verfügbar",
         "update_ask": "Version {} ist verfügbar (installiert: {}).\nJetzt herunterladen?", "yes": "Ja", "no": "Nein",
@@ -97,6 +99,8 @@ TR = {
         "start": "Start", "save": "Save", "ready": "ready", "starting": "starting...",
         "running": "running · {} · {:.0f} fps",
         "no_device": "Error: no video device found", "no_frames": "Error: no picture from device (in use?)",
+        "cam_denied": "Error: no camera access, allow it in System Settings under Privacy & Security",
+        "mic_denied": "Error: no microphone access, allow it in System Settings under Privacy & Security",
         "error": "Error: {}",
         "update": "Update to v{} available",
         "update_ask": "Version {} is available (installed: {}).\nDownload it now?", "yes": "Yes", "no": "No",
@@ -1240,6 +1244,8 @@ class Main(QWidget):
         """Start, or while running ("Save" from the hover bar's settings) restart with the new settings."""
         if not self.cams or not self.res.currentText() or not self.fps.currentText():
             return self.set_status("no_device", kind="err")
+        if not self.permitted():
+            return
         self.stop()
         self.save()
         self.saved = self.state()
@@ -1272,6 +1278,28 @@ class Main(QWidget):
         self.hide()
         self.btn.setText(self.t("save"))
         self.update_save()
+
+    def permitted(self):
+        """macOS: Qt won't open camera / microphone until the user allowed it, and doesn't ask by itself.
+        Undetermined: show the system prompt, start again once answered. Windows / Linux: always granted."""
+        app = QApplication.instance()
+        perms = [(QCameraPermission(), "cam_denied")]
+        if self.ain.currentIndex() > 0:
+            perms.append((QMicrophonePermission(), "mic_denied"))
+        for perm, denied in perms:
+            status = app.checkPermission(perm)
+            if status == Qt.PermissionStatus.Undetermined:
+                def answered(p):  # one parameter only, PySide rejects others; undetermined = no prompt possible
+                    # (python without Info.plist)
+                    if app.checkPermission(p) == Qt.PermissionStatus.Undetermined:
+                        return self.set_status(denied, kind="err")
+                    self.start()
+                app.requestPermission(perm, self, answered)
+                return False
+            if status == Qt.PermissionStatus.Denied:
+                self.set_status(denied, kind="err")
+                return False
+        return True
 
     def start_audio(self, dev_in, dev_out):
         """Own source -> sink pump instead of the capture session's audio path, which crackles. 48 kHz stereo when

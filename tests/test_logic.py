@@ -1,4 +1,5 @@
 """Logic checks, Qt runs offscreen:  python -m unittest discover tests"""
+import inspect
 import os
 import sys
 import tempfile
@@ -119,6 +120,29 @@ class Logic(unittest.TestCase):
         self.m.buf.setValue(self.m.buf.value() + 50)
         self.assertTrue(self.m.btn.isEnabled())
         self.m.camera = None
+
+    def test_start_asks_for_camera_access_first(self):
+        """macOS: Qt refuses the camera until the user allowed it, and never asks by itself."""
+        self.m.cams = [mock.Mock()]
+        self.m.res.fill(["1920x1080"], "1920x1080")
+        self.m.fps.fill(["60"], "60")
+        Status = Qt.PermissionStatus
+        with mock.patch.object(app, "checkPermission", return_value=Status.Undetermined), \
+                mock.patch.object(app, "requestPermission") as ask:
+            self.m.start()
+        ask.assert_called_once()
+        self.assertIsNone(self.m.camera)
+        self.assertEqual(len(inspect.signature(ask.call_args.args[2]).parameters), 1)  # PySide refuses other functors
+        with mock.patch.object(app, "checkPermission", return_value=Status.Undetermined), \
+                mock.patch.object(self.m, "start") as again:
+            ask.call_args.args[2](None)  # no prompt possible (source run): error, not another request
+        again.assert_not_called()
+        self.assertEqual(self.m.status_key, "cam_denied")
+        self.m.status_key = None
+        with mock.patch.object(app, "checkPermission", return_value=Status.Denied):
+            self.m.start()
+        self.assertIsNone(self.m.camera)
+        self.assertEqual(self.m.status_key, "cam_denied")
 
 
 if __name__ == "__main__":
