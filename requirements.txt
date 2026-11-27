@@ -1,4 +1,4 @@
 PySide6==6.12.0
 # Windows only: Qt can't set webcam exposure there, DirectShow can
-opencv-python-headless==5.0.0.93; sys_platform == "win32"
+opencv-python-headless==5.1.0.95; sys_platform == "win32"
 pygrabber==0.2; sys_platform == "win32"
